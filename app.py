@@ -188,7 +188,7 @@ def calculate_split(bill_data, allocations, person_names):
     return person_totals
 
 # ------------------ STREAMLIT UI SETUP ------------------ #
-st.title("Splitter - Bill Splitter Web App")
+st.title("PicSplit - Bill Splitter Web App")
 
 api_key = st.text_input("Enter Gemini API Key:")
 
