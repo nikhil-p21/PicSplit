@@ -1,0 +1,19 @@
+[project]
+name = "bill-splitter"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "nikhil.pandey"}
+]
+readme = "README.md"
+requires-python = ">=3.9,<3.9.7 || >3.9.7"
+dependencies = [
+    "pytesseract (>=0.3.13,<0.4.0)",
+    "google-genai (>=1.1.0,<2.0.0)",
+    "streamlit (>=1.42.0,<2.0.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
