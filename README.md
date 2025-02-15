@@ -1,13 +1,13 @@
 # PicSplit
 
-PicSplit is a web application that splits bills from images using Optical Character Recognition (OCR) and provides an easy way to manage shared expenses.
+PicSplit is a web app that allows users to split bills from images easily. Upload an image of a receipt, and the app extracts and divides the bill among participants.
 
 ## Features
 
-- Upload an image of a bill and extract text automatically.
-- Identify and split individual items among users.
-- Generate an equal or custom split for payments.
-- Simple and user-friendly Streamlit interface.
+- Extracts text from images to identify items and prices.
+- Splits bills fairly among participants.
+- User-friendly interface powered by Streamlit.
+- Uses Poetry for package management.
 
 ## Prerequisites
 
@@ -15,6 +15,12 @@ Ensure you have **Poetry** installed. If not, install it using:
 
 ```sh
 pip install poetry
+```
+
+Additionally, add the Poetry shell plugin:
+
+```sh
+poetry self add poetry-plugin-shell
 ```
 
 ## Installation
