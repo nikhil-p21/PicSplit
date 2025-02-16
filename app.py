@@ -84,85 +84,85 @@ def extract_bill(api_key, uploaded_image, prompt):
             st.error("Failed to open the image. Error: " + str(e))
             return None
 
-        client = genai.Client(api_key=api_key)
-        schema_dict = Bill.model_json_schema()
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=[prompt, image],
-            config={
-                'response_mime_type': 'application/json',
-                'response_schema': schema_dict,
-            }
-        )
-        bill_obj = response.parsed
-        bill_data = bill_obj.dict() if hasattr(bill_obj, "dict") else bill_obj
-        bill_data = make_item_keys_unique(bill_data)
-        bill_data = merge_discount_items(bill_data)
-        st.write("Extracted Bill Data:")
-        st.write(bill_data)
-        return bill_data
+        with st.spinner("Extracting bill data..."):
+            client = genai.Client(api_key=api_key)
+            schema_dict = Bill.model_json_schema()
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=[prompt, image],
+                config={
+                    'response_mime_type': 'application/json',
+                    'response_schema': schema_dict,
+                }
+            )
+            bill_obj = response.parsed
+            bill_data = bill_obj.dict() if hasattr(bill_obj, "dict") else bill_obj
+            bill_data = make_item_keys_unique(bill_data)
+            bill_data = merge_discount_items(bill_data)
+            st.success("Bill data extracted successfully!")
+            st.json(bill_data)  # Display JSON for clarity.
+            return bill_data
 
 # ------------------ STEP 2: Display Allocation UI ------------------ #
 def display_allocation_ui(bill_data, person_names):
-    st.subheader("Allocate Items Among Persons")
+    st.header("Step 2: Allocate Items to Each Person")
     allocations = {}
     for idx, item in enumerate(bill_data.get("items", [])):
         item_name = item.get("normalized_name", f"Item {idx+1}")
         unit_price = item.get("price_after_tax", 0)
         discount = item.get("discount_amount", 0)
-        # Use the helper function to determine the tax rate.
         tax_rate = get_tax_rate(item_name)
-        # Effective price: base price increased by tax, then discount subtracted.
         effective_price = (unit_price * (1 + tax_rate)) - discount
-        st.markdown(f"### {item_name}")
-        st.write(f"**Base Price:** ${unit_price}")
-        st.write(f"**Tax Rate:** {tax_rate*100:.0f}%")
-        if discount and discount > 0:
-            st.write(f"**Discount:** ${discount}")
-        st.write(f"**Effective Price:** ${effective_price:.2f}")
-        
-        # Input for total quantity (default is 1).
-        total_qty = st.number_input(
-            f"Enter total quantity for '{item_name}':",
-            min_value=0,
-            value=1,
-            step=1,
-            key=f"total_qty_{item_name}"
-        )
-        
-        # "Share Equally" button.
-        if st.button("Share Equally", key=f"share_eq_{item_name}"):
-            num_persons = len(person_names)
-            if num_persons > 0:
-                equal_share = Fraction(total_qty, num_persons)
-                for person in person_names:
-                    st.session_state[f"{item_name}_{person}"] = str(equal_share)
-                st.session_state[f"share_version_{item_name}"] = st.session_state.get(f"share_version_{item_name}", 0) + 1
-        
-        version = st.session_state.get(f"share_version_{item_name}", 0)
-        
-        # Display share inputs as text inputs for fraction strings.
-        share_cols = st.columns(len(person_names))
-        item_allocations = {}
-        allocation_sum = Fraction(0)
-        for i, person in enumerate(person_names):
-            key = f"{item_name}_{person}_v{version}"
-            default_val = st.session_state.get(f"{item_name}_{person}", "0")
-            with share_cols[i]:
-                share_str = st.text_input(
-                    label=f"{person}'s share (e.g., 1/3)",
-                    value=default_val,
-                    key=key
-                )
-                item_allocations[person] = share_str
-                allocation_sum += parse_fraction(share_str)
-        
-        if allocation_sum != Fraction(total_qty):
-            st.error(
-                f"Allocation error for '{item_name}': Total allocated is {float(allocation_sum):.2f} but should equal {total_qty}."
+
+        with st.expander(f"Allocation for **{item_name}**", expanded=True):
+            st.markdown(
+                f"**Base Price:** ${unit_price:.2f} | **Tax Rate:** {tax_rate*100:.0f}% | "
+                f"**Discount:** ${discount:.2f} | **Effective Price:** ${effective_price:.2f}"
             )
-        allocations[item_name] = {"total_quantity": total_qty, "shares": item_allocations}
-        st.markdown("---")
+            
+            total_qty = st.number_input(
+                f"Enter total quantity for '{item_name}':",
+                min_value=0,
+                value=1,
+                step=1,
+                key=f"total_qty_{item_name}"
+            )
+            
+            # Button to share equally among persons.
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                if st.button("Share Equally", key=f"share_eq_{item_name}"):
+                    num_persons = len(person_names)
+                    if num_persons > 0:
+                        equal_share = Fraction(total_qty, num_persons)
+                        for person in person_names:
+                            st.session_state[f"{item_name}_{person}"] = str(equal_share)
+                        st.session_state[f"share_version_{item_name}"] = st.session_state.get(f"share_version_{item_name}", 0) + 1
+            
+            version = st.session_state.get(f"share_version_{item_name}", 0)
+            
+            # Create columns for each person’s share input.
+            share_cols = st.columns(len(person_names))
+            item_allocations = {}
+            allocation_sum = Fraction(0)
+            for i, person in enumerate(person_names):
+                key = f"{item_name}_{person}_v{version}"
+                default_val = st.session_state.get(f"{item_name}_{person}", "0")
+                with share_cols[i]:
+                    share_str = st.text_input(
+                        label=f"{person}'s share (e.g., 1/3)",
+                        value=default_val,
+                        key=key
+                    )
+                    item_allocations[person] = share_str
+                    allocation_sum += parse_fraction(share_str)
+            
+            if allocation_sum != Fraction(total_qty):
+                st.error(
+                    f"Allocation error: Total allocated is {float(allocation_sum):.2f} but should equal {total_qty}."
+                )
+            allocations[item_name] = {"total_quantity": total_qty, "shares": item_allocations}
+            st.markdown("---")
     return allocations
 
 # ------------------ STEP 3: Calculate the Split Based on Allocations ------------------ #
@@ -179,7 +179,6 @@ def calculate_split(bill_data, allocations, person_names):
         shares = allocation_info.get("shares", {})
         if total_qty <= 0:
             continue
-        # Compute unit cost: effective price per one item.
         unit_cost = effective_price / total_qty
         for person in person_names:
             share_str = shares.get(person, "0")
@@ -187,24 +186,28 @@ def calculate_split(bill_data, allocations, person_names):
             person_totals[person] += float(allocated_fraction) * unit_cost
     return person_totals
 
-# ------------------ STREAMLIT UI SETUP ------------------ #
-st.title("PicSplit - Bill Splitter Web App")
-
-api_key = st.text_input("Enter Gemini API Key:")
-
-num_people = st.number_input("Enter the number of people:", min_value=1, max_value=100, value=2, step=1)
-person_names = []
-if num_people > 0:
-    st.write(f"Enter the names of the {num_people} people:")
-    for i in range(num_people):
-        name = st.text_input(f"Name of person {i+1}:", key=f"name_{i}")
-        if name:
-            person_names.append(name)
-
-uploaded_image = st.file_uploader("Upload your grocery bill image", type=["jpg", "jpeg", "png"])
-
-# ------------------ Updated Prompt for Structured Output ------------------ #
-prompt = """
+# ------------------ MAIN STREAMLIT UI SETUP ------------------ #
+def main():
+    st.title("PicSplit - Bill Splitter Web App")
+    
+    # Sidebar configuration for API key and person names.
+    st.sidebar.header("Configuration")
+    api_key = st.sidebar.text_input("Enter Gemini API Key:", type="password")
+    num_people = st.sidebar.number_input("Number of People:", min_value=1, max_value=100, value=2, step=1)
+    
+    person_names = []
+    if num_people > 0:
+        st.sidebar.markdown("#### Enter Names")
+        for i in range(num_people):
+            name = st.sidebar.text_input(f"Name of Person {i+1}:", key=f"name_{i}")
+            if name:
+                person_names.append(name)
+    
+    st.header("Step 1: Upload Bill Image")
+    uploaded_image = st.file_uploader("Upload your grocery bill image", type=["jpg", "jpeg", "png"])
+    
+    # Updated prompt for structured output.
+    prompt = """
 You are given a supermarket grocery bill in Japanese that may have been OCRed and translated.
 The person who has the bill does not know Japanese and needs to translate the bill into English in order to split it manually with his friends.
 For supermarket bills, note that if an item has a discount, the discount is mentioned on the line immediately below the item and starts with "code128割引". Associate that discount with the item immediately above it.
@@ -239,39 +242,42 @@ Return a JSON object that conforms to this schema:
 Return only the JSON object with no additional text.
 """
 
-if st.button("Process Bill"):
-    if api_key and num_people > 0 and len(person_names) == num_people and uploaded_image:
-        bill_data = extract_bill(api_key, uploaded_image, prompt)
-        if bill_data is not None:
-            st.success("Bill data extracted successfully!")
-            st.session_state.bill_data = bill_data
-            st.session_state.person_names = person_names
-    else:
-        st.warning("Please fill in all the fields and upload an image before proceeding.")
+    # Process the bill when the button is clicked.
+    if st.button("Process Bill"):
+        if api_key and num_people > 0 and len(person_names) == num_people and uploaded_image:
+            bill_data = extract_bill(api_key, uploaded_image, prompt)
+            if bill_data is not None:
+                st.session_state.bill_data = bill_data
+                st.session_state.person_names = person_names
+        else:
+            st.warning("Please fill in all fields and upload an image before proceeding.")
 
-if "bill_data" in st.session_state and "person_names" in st.session_state:
-    bill_data = st.session_state.bill_data
-    person_names = st.session_state.person_names
-    
-    st.header("Step 2: Allocate Items to Each Person")
-    allocations = display_allocation_ui(bill_data, person_names)
-    
-    if st.button("Calculate Split"):
-        valid_allocation = True
-        for item in bill_data.get("items", []):
-            item_name = item.get("normalized_name")
-            allocation_info = allocations.get(item_name, {})
-            total_qty = allocation_info.get("total_quantity", 0)
-            shares = allocation_info.get("shares", {})
-            total_allocated = sum(parse_fraction(shares.get(p, "0")) for p in person_names)
-            if total_allocated != Fraction(total_qty):
-                st.error(
-                    f"Allocation error for '{item_name}': Total allocated is {float(total_allocated):.2f} but should equal {total_qty}."
-                )
-                valid_allocation = False
+    # If bill data has been extracted, display allocation UI.
+    if "bill_data" in st.session_state and "person_names" in st.session_state:
+        bill_data = st.session_state.bill_data
+        person_names = st.session_state.person_names
         
-        if valid_allocation:
-            person_totals = calculate_split(bill_data, allocations, person_names)
-            st.subheader("Split Amounts")
-            for person, total in person_totals.items():
-                st.write(f"**{person}:** ${total:.2f}")
+        allocations = display_allocation_ui(bill_data, person_names)
+        
+        if st.button("Calculate Split"):
+            valid_allocation = True
+            for item in bill_data.get("items", []):
+                item_name = item.get("normalized_name")
+                allocation_info = allocations.get(item_name, {})
+                total_qty = allocation_info.get("total_quantity", 0)
+                shares = allocation_info.get("shares", {})
+                total_allocated = sum(parse_fraction(shares.get(p, "0")) for p in person_names)
+                if total_allocated != Fraction(total_qty):
+                    st.error(
+                        f"Allocation error for '{item_name}': Total allocated is {float(total_allocated):.2f} but should equal {total_qty}."
+                    )
+                    valid_allocation = False
+            
+            if valid_allocation:
+                person_totals = calculate_split(bill_data, allocations, person_names)
+                st.subheader("Split Amounts")
+                for person, total in person_totals.items():
+                    st.write(f"**{person}:** ${total:.2f}")
+
+if __name__ == "__main__":
+    main()
