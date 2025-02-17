@@ -24,7 +24,7 @@ def get_tax_rate(item_name: str) -> float:
 class BillItem(BaseModel):
     original_name: str
     normalized_name: str
-    price_after_tax: float
+    price_before_tax: float
     discount_amount: float  # Model will output 0 if no discount exists.
 
 class Bill(BaseModel):
@@ -105,20 +105,24 @@ def extract_bill(api_key, uploaded_image, prompt):
 
 # ------------------ STEP 2: Display Allocation UI ------------------ #
 def display_allocation_ui(bill_data, person_names):
-    st.header("Step 2: Allocate Items to Each Person")
+    st.header("Allocate Items to Each Person")
     allocations = {}
     for idx, item in enumerate(bill_data.get("items", [])):
         item_name = item.get("normalized_name", f"Item {idx+1}")
-        unit_price = item.get("price_after_tax", 0)
+        price_before_tax = item.get("price_before_tax", 0)
         discount = item.get("discount_amount", 0)
         tax_rate = get_tax_rate(item_name)
-        effective_price = (unit_price * (1 + tax_rate)) - discount
+        effective_price = (price_before_tax * (1 + tax_rate)) - discount
 
-        with st.expander(f"Allocation for **{item_name}**", expanded=True):
-            st.markdown(
-                f"**Base Price:** ${unit_price:.2f} | **Tax Rate:** {tax_rate*100:.0f}% | "
-                f"**Discount:** ${discount:.2f} | **Effective Price:** ${effective_price:.2f}"
-            )
+        with st.expander(f"### Allocation for **{item_name}**", expanded=True):
+            col1, col2, col3, col4 = st.columns(4)
+            col1.markdown(f"**Base Price: ** ${price_before_tax:.2f}")
+            col2.markdown(f"**Tax Rate:** {tax_rate*100:.0f}%")
+            if discount > 0:
+                col3.markdown(f"**Discount:** -${discount:.2f}")
+            else:
+                col3.markdown("")  
+            col4.markdown(f"**Effective Price:** ${effective_price:.2f}")
             
             total_qty = st.number_input(
                 f"Enter total quantity for '{item_name}':",
@@ -144,7 +148,6 @@ def display_allocation_ui(bill_data, person_names):
             # Create columns for each person’s share input.
             share_cols = st.columns(len(person_names))
             item_allocations = {}
-            allocation_sum = Fraction(0)
             for i, person in enumerate(person_names):
                 key = f"{item_name}_{person}_v{version}"
                 default_val = st.session_state.get(f"{item_name}_{person}", "0")
@@ -155,12 +158,8 @@ def display_allocation_ui(bill_data, person_names):
                         key=key
                     )
                     item_allocations[person] = share_str
-                    allocation_sum += parse_fraction(share_str)
             
-            if allocation_sum != Fraction(total_qty):
-                st.error(
-                    f"Allocation error: Total allocated is {float(allocation_sum):.2f} but should equal {total_qty}."
-                )
+            # Note: We removed the live allocation error check here to avoid re-rendering issues.
             allocations[item_name] = {"total_quantity": total_qty, "shares": item_allocations}
             st.markdown("---")
     return allocations
@@ -170,10 +169,10 @@ def calculate_split(bill_data, allocations, person_names):
     person_totals = {person: 0.0 for person in person_names}
     for item in bill_data.get("items", []):
         item_name = item.get("normalized_name")
-        unit_price = item.get("price_after_tax", 0)
+        price_before_tax = item.get("price_before_tax", 0)
         discount = item.get("discount_amount", 0)
         tax_rate = get_tax_rate(item_name)
-        effective_price = (unit_price * (1 + tax_rate)) - discount
+        effective_price = (price_before_tax * (1 + tax_rate)) - discount
         allocation_info = allocations.get(item_name, {})
         total_qty = allocation_info.get("total_quantity", 0)
         shares = allocation_info.get("shares", {})
@@ -203,7 +202,7 @@ def main():
             if name:
                 person_names.append(name)
     
-    st.header("Step 1: Upload Bill Image")
+    st.header("Upload image of the bill")
     uploaded_image = st.file_uploader("Upload your grocery bill image", type=["jpg", "jpeg", "png"])
     
     # Updated prompt for structured output.
@@ -221,7 +220,7 @@ Extract the following details:
      If the text is "FSL C Bread 0 Garlic,198", output "crisp bread garlic".
      If the text is "FSL Crisp Bread Cheese,198", output "crisp bread cheese".
      If the text is "FM Bifidus Yogurt 400g", output "yogurt".
-   - "price_after_tax": the base price as a number.
+   - "price_before_tax": the base price as a number.
    - "discount_amount": the discount on that item as a number. If there is no discount, output 0.
 2. Also extract the total bill amount as "total_bill".
 
@@ -231,7 +230,7 @@ Return a JSON object that conforms to this schema:
     {
       "original_name": "string",
       "normalized_name": "string",
-      "price_after_tax": number,
+      "price_before_tax": number,
       "discount_amount": number
     },
     ...
@@ -261,6 +260,7 @@ Return only the JSON object with no additional text.
         
         if st.button("Calculate Split"):
             valid_allocation = True
+            # Perform allocation error checking here (only when calculating the split)
             for item in bill_data.get("items", []):
                 item_name = item.get("normalized_name")
                 allocation_info = allocations.get(item_name, {})
