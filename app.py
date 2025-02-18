@@ -116,20 +116,20 @@ def display_allocation_ui(bill_data, person_names):
 
         with st.expander(f"### Allocation for **{item_name}**", expanded=True):
             col1, col2, col3, col4 = st.columns(4)
-            col1.markdown(f"**Base Price: ** ${price_before_tax:.2f}")
+            col1.markdown(f"**Base Price:** ¥{price_before_tax:.2f}")
             col2.markdown(f"**Tax Rate:** {tax_rate*100:.0f}%")
             if discount > 0:
-                col3.markdown(f"**Discount:** -${discount:.2f}")
+                col3.markdown(f"**Discount:** -¥{discount:.2f}")
             else:
                 col3.markdown("")  
-            col4.markdown(f"**Effective Price:** ${effective_price:.2f}")
+            col4.markdown(f"**Effective Price:** ¥{effective_price:.2f}")
             
             total_qty = st.number_input(
                 f"Enter total quantity for '{item_name}':",
                 min_value=0,
                 value=1,
                 step=1,
-                key=f"total_qty_{item_name}"
+                key=f"total_qty_{idx}"
             )
             
             # Button to share equally among persons.
