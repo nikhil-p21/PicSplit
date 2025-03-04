@@ -25,7 +25,7 @@ const BillUploader = ({
         Upload Your Bill
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
-        Take a clear photo of your Japanese receipt and upload it below
+        Take a clear photo of your Japanese receipt and upload it below.
       </Typography>
       
       <APIKeyInput apiKey={apiKey} onApiKeyChange={onApiKeyChange} />
@@ -58,8 +58,10 @@ const BillUploader = ({
           </Box>
         ) : (
           <Box>
+            {/* Added capture attribute to allow camera usage */}
             <input
               accept="image/*"
+              capture="environment"
               style={{ display: 'none' }}
               id="bill-image-upload"
               type="file"
@@ -72,7 +74,7 @@ const BillUploader = ({
                 startIcon={<CloudUploadIcon />}
                 sx={{ mb: 2 }}
               >
-                Select Bill Image
+                Select or Capture Bill Image
               </Button>
             </label>
             <Typography variant="body2" color="text.secondary">
@@ -86,6 +88,7 @@ const BillUploader = ({
         <Box sx={{ textAlign: 'center', mb: 2 }}>
           <input
             accept="image/*"
+            capture="environment"
             style={{ display: 'none' }}
             id="bill-image-change"
             type="file"
