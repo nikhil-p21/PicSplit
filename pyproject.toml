@@ -4,7 +4,7 @@ version = "0.1.0"
 description = ""
 authors = ["nikhil.pandey"]
 readme = "README.md"
-packages = [{include = "bill_splitter"}]
+packages = [{include = "backend"}]
 # You can adjust the package path as needed
 
 [tool.poetry.dependencies]
