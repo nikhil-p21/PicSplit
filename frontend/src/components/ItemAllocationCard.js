@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Card, CardContent, Typography, Box, TextField, Button, Divider, Avatar } from '@mui/material';
+import { Card, CardContent, Typography, Box, TextField, Button, Divider, Avatar, Alert } from '@mui/material';
 import Emoji from 'react-emoji-render';
 
 const ItemAllocationCard = ({ 
@@ -77,6 +77,25 @@ const ItemAllocationCard = ({
     }
   };
   
+  // Fix for quantity input to handle backspace properly
+  const handleQuantityChange = (e) => {
+    const value = e.target.value;
+    // Allow empty value temporarily during editing
+    if (value === "") {
+      onUpdateQuantity(1); // Set to 1 but allow further editing
+    } else {
+      onUpdateQuantity(Math.max(1, parseInt(value) || 1));
+    }
+  };
+
+  const handleQuantityKeyDown = (event) => {
+    // If user presses backspace when the value is "1", clear the field to allow new input
+    if ((event.key === 'Backspace' || event.key === 'Delete') && event.target.value === "1") {
+      event.target.value = "";
+      // The onChange event will handle setting the value
+    }
+  };
+  
   return (
     <Card>
       <CardContent>
@@ -123,6 +142,13 @@ const ItemAllocationCard = ({
         
         <Divider sx={{ mb: 2 }} />
         
+        {/* Warning Alert about Quantity */}
+        <Alert severity="info" sx={{ mb: 2, fontSize: '0.75rem' }}>
+          <Typography variant="body2">
+            The quantity might not be 1. Please check the price to determine if you need to adjust the quantity.
+          </Typography>
+        </Alert>
+        
         {/* Quantity Input */}
         <Box sx={{ mb: 2 }}>
           <Typography variant="body2" gutterBottom>
@@ -132,7 +158,8 @@ const ItemAllocationCard = ({
             type="number"
             size="small"
             value={allocation.totalQuantity}
-            onChange={(e) => onUpdateQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+            onChange={handleQuantityChange}
+            onKeyDown={handleQuantityKeyDown}
             InputProps={{
               inputProps: { min: 1 }
             }}
