@@ -2,6 +2,8 @@
 import React from 'react';
 import { Box, Typography, Button, Paper, CircularProgress } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
+import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 import APIKeyInput from './APIKeyInput';
 
 const BillUploader = ({ 
@@ -25,7 +27,7 @@ const BillUploader = ({
         Upload Your Bill
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
-        Take a clear photo of your Japanese receipt and upload it below.
+        Take a clear photo of your Japanese receipt or select an existing photo.
       </Typography>
       
       <APIKeyInput apiKey={apiKey} onApiKeyChange={onApiKeyChange} />
@@ -58,10 +60,9 @@ const BillUploader = ({
           </Box>
         ) : (
           <Box>
-            {/* Added capture attribute to allow camera usage */}
+            {/* Regular file input without capture attribute */}
             <input
               accept="image/*"
-              capture="environment"
               style={{ display: 'none' }}
               id="bill-image-upload"
               type="file"
@@ -71,12 +72,33 @@ const BillUploader = ({
               <Button
                 variant="outlined"
                 component="span"
-                startIcon={<CloudUploadIcon />}
-                sx={{ mb: 2 }}
+                startIcon={<PhotoLibraryIcon />}
+                sx={{ mb: 2, mr: 2 }}
               >
-                Select or Capture Bill Image
+                Choose from Gallery
               </Button>
             </label>
+            
+            {/* Camera-specific input with capture attribute */}
+            <input
+              accept="image/*"
+              capture="environment"
+              style={{ display: 'none' }}
+              id="bill-image-capture"
+              type="file"
+              onChange={handleImageChange}
+            />
+            <label htmlFor="bill-image-capture">
+              <Button
+                variant="outlined"
+                component="span"
+                startIcon={<PhotoCameraIcon />}
+                sx={{ mb: 2 }}
+              >
+                Take Photo
+              </Button>
+            </label>
+            
             <Typography variant="body2" color="text.secondary">
               Support for JPG, JPEG and PNG files
             </Typography>
@@ -86,21 +108,41 @@ const BillUploader = ({
       
       {selectedImage && (
         <Box sx={{ textAlign: 'center', mb: 2 }}>
+          {/* Gallery option */}
+          <input
+            accept="image/*"
+            style={{ display: 'none' }}
+            id="bill-image-change-gallery"
+            type="file"
+            onChange={handleImageChange}
+          />
+          <label htmlFor="bill-image-change-gallery">
+            <Button
+              variant="text"
+              component="span"
+              startIcon={<PhotoLibraryIcon />}
+              sx={{ mr: 2 }}
+            >
+              Choose Another
+            </Button>
+          </label>
+          
+          {/* Camera option */}
           <input
             accept="image/*"
             capture="environment"
             style={{ display: 'none' }}
-            id="bill-image-change"
+            id="bill-image-change-camera"
             type="file"
             onChange={handleImageChange}
           />
-          <label htmlFor="bill-image-change">
+          <label htmlFor="bill-image-change-camera">
             <Button
               variant="text"
               component="span"
-              sx={{ mr: 2 }}
+              startIcon={<PhotoCameraIcon />}
             >
-              Change Image
+              Take New Photo
             </Button>
           </label>
         </Box>
