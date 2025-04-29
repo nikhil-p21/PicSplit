@@ -4,11 +4,9 @@ import { Box, Typography, Button, Paper, CircularProgress } from '@mui/material'
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
-import APIKeyInput from './APIKeyInput';
+// import APIKeyInput from './APIKeyInput';
 
 const BillUploader = ({ 
-  apiKey, 
-  onApiKeyChange, 
   onImageUpload, 
   selectedImage, 
   onProcessBill, 
@@ -29,8 +27,6 @@ const BillUploader = ({
       <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
         Take a clear photo of your Japanese receipt or select an existing photo.
       </Typography>
-      
-      <APIKeyInput apiKey={apiKey} onApiKeyChange={onApiKeyChange} />
       
       <Paper
         sx={{
@@ -159,7 +155,7 @@ const BillUploader = ({
           variant="contained"
           color="primary"
           onClick={onProcessBill}
-          disabled={isProcessing || !selectedImage || !apiKey}
+          disabled={isProcessing || !selectedImage}
           startIcon={isProcessing ? <CircularProgress size={20} color="inherit" /> : null}
         >
           {isProcessing ? 'Processing...' : 'Process Bill'}

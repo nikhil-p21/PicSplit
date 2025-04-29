@@ -63,7 +63,7 @@ const theme = createTheme({
 });
 
 function App() {
-  const [apiKey, setApiKey] = useState('');
+  const [apiKey, setApiKey] = useState('REMOVED');
   const [persons, setPersons] = useState([
     { id: 1, name: '', avatarColor: getRandomColor(), emoji: getRandomEmoji() },
     { id: 2, name: '', avatarColor: getRandomColor(), emoji: getRandomEmoji() }
