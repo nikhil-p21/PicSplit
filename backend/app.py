@@ -13,6 +13,17 @@ import logging
 
 app = Flask(__name__, static_folder='./build', static_url_path='/')
 
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Loads from .env
+
+api_key = os.getenv("API_KEY")
+# print(api_key)
+@app.route("/get-key")
+def get_key():
+    return {"key": api_key}
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
