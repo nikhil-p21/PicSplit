@@ -28,3 +28,6 @@ build/
 
 # VS Code settings
 .vscode/
+temp/
+.env
+node_modules/
