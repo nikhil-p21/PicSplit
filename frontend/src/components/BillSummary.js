@@ -6,7 +6,7 @@ import {
 import Emoji from 'react-emoji-render';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 
-const BillSummary = ({ splitResults, persons, billTotal, onBack }) => {
+const BillSummary = ({ splitResults, persons, calculatedBillTotal, onBack }) => {
   if (!splitResults) return null;
 
   const personArray = Object.values(splitResults);
@@ -47,7 +47,7 @@ const BillSummary = ({ splitResults, persons, billTotal, onBack }) => {
           <Card sx={{ height: '100%' }}>
             <CardContent>
               <Typography variant="h6" gutterBottom>
-                Total Bill: ¥{billTotal.toFixed(2)}
+                Total Bill: ¥{calculatedBillTotal.toFixed(2)}
               </Typography>
               
               <Box sx={{ height: 280 }}>

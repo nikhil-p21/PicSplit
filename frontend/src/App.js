@@ -77,6 +77,7 @@ function App() {
   const [allocations, setAllocations] = useState({});
   const [currentStep, setCurrentStep] = useState(1);
   const [splitResults, setSplitResults] = useState(null);
+  const [calculatedBillTotal, setCalculatedBillTotal] = useState(0);
 
   // --- REMOVED useEffect for fetching API Key ---
   // useEffect(() => {
@@ -92,6 +93,8 @@ function App() {
   useEffect(() => {
     if (billData && billData.items) {
       const initialAllocations = {};
+      let newCalculatedBillTotal = 0;
+
       billData.items.forEach(item => {
         const itemName = item.normalized_name;
         initialAllocations[itemName] = {
@@ -101,14 +104,47 @@ function App() {
             return acc;
           }, {})
         };
+
+        // Calculate effective price for each item
+        const priceBeforeTax = item.price_before_tax;
+        const discount = item.discount_amount;
+        const taxRate = (itemName.toLowerCase().includes('plastic') &&
+                         itemName.toLowerCase().includes('bag')) ? 0.10 : 0.08;
+        const effectivePrice = (priceBeforeTax * (1 + taxRate)) - discount;
+        newCalculatedBillTotal += effectivePrice;
       });
+
       setAllocations(initialAllocations);
+      setCalculatedBillTotal(newCalculatedBillTotal);
+
     }
     // Ensure allocations are cleared or reset if billData becomes null
     else if (!billData) {
         setAllocations({});
+        setCalculatedBillTotal(0); // Reset calculated total as well
     }
   }, [billData, persons]); // Rerun when billData or persons change
+
+  const deleteItem = (itemName) => {
+    if (!billData || !billData.items) return;
+
+    const newItemsArray = billData.items.filter(item => item.normalized_name !== itemName);
+    setBillData(prevBillData => ({
+      ...prevBillData,
+      items: newItemsArray
+    }));
+
+    setAllocations(prevAllocations => {
+      const newAllocations = { ...prevAllocations };
+      delete newAllocations[itemName];
+      return newAllocations;
+    });
+
+    // The useEffect hook depending on [billData, persons] will automatically
+    // recalculate calculatedBillTotal and reconstruct allocations for the remaining items.
+    // A toast message for successful deletion
+    toast.info(`Item "${itemName}" deleted.`);
+  };
 
   function getRandomColor() {
     const colors = [
@@ -561,6 +597,7 @@ function App() {
                       onUpdateShare={(personId, value) => updateItemShare(item.normalized_name, personId, value)}
                       onUpdateQuantity={(qty) => updateItemQuantity(item.normalized_name, qty)}
                       itemEmoji={parseItemEmoji(item.normalized_name)}
+                      onDeleteItem={() => deleteItem(item.normalized_name)} // Pass deleteItem function
                     />
                   </Grid>
                 );
@@ -601,7 +638,7 @@ function App() {
           <BillSummary
             splitResults={splitResults}
             persons={persons}
-            billTotal={billData ? billData.total_bill : 0}
+            calculatedBillTotal={calculatedBillTotal} // Pass the new calculated total
             onBack={() => navigateToStep(3)}
           />
         );
