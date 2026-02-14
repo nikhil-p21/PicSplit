@@ -31,3 +31,6 @@ build/
 temp/
 .env
 node_modules/
+backend/data/
+*.db
+*.sqlite3

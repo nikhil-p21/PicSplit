@@ -4,6 +4,7 @@ from PIL import Image
 from google import genai
 # from google.genai import types # This wasn't strictly necessary for the original code provided
 from pydantic import BaseModel, Field
+from datetime import date
 from typing import List, Dict, Any, Optional
 from fractions import Fraction
 import io
@@ -11,6 +12,32 @@ import os
 import traceback
 import logging
 from pathlib import Path # Added for robust .env loading
+
+try:
+    from backend.persistence.database import DATABASE_URL, init_db, session_scope
+    from backend.persistence.repository import (
+        DEFAULT_CATEGORIES,
+        create_expense,
+        create_receipt,
+        get_receipt,
+        list_expenses,
+        list_receipts,
+        monthly_category_breakdown,
+        update_receipt_item_category,
+    )
+except ModuleNotFoundError:
+    # Fallback when running from the backend directory directly.
+    from persistence.database import DATABASE_URL, init_db, session_scope
+    from persistence.repository import (
+        DEFAULT_CATEGORIES,
+        create_expense,
+        create_receipt,
+        get_receipt,
+        list_expenses,
+        list_receipts,
+        monthly_category_breakdown,
+        update_receipt_item_category,
+    )
 
 # --- Flask App Setup ---
 # Assuming frontend build is in ../frontend/build
@@ -37,6 +64,11 @@ if not server_api_key:
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# Initialize local persistence at startup.
+init_db()
+logger.info("Persistence initialized. DATABASE_URL=%s", DATABASE_URL)
 
 
 @app.route('/favicon.ico')
@@ -111,6 +143,177 @@ def merge_discount_items(bill_data: Dict[str, Any]) -> Dict[str, Any]:
     bill_data["items"] = merged_items
     return bill_data
 # --- End Pydantic Models and Helper Functions ---
+
+
+def _parse_int_query_param(name: str, default: int) -> int:
+    raw_value = request.args.get(name)
+    if raw_value is None:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        raise ValueError(f"Invalid '{name}' query parameter.")
+
+
+def _parse_iso_date(value: Optional[str], field_name: str) -> Optional[date]:
+    if value in (None, ""):
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"Invalid '{field_name}' date format. Use YYYY-MM-DD.")
+
+
+# --- Persistence API Endpoints ---
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({
+        "status": "ok",
+        "database_url": DATABASE_URL,
+    })
+
+
+@app.route('/api/categories', methods=['GET'])
+def categories():
+    return jsonify({"categories": DEFAULT_CATEGORIES})
+
+
+@app.route('/api/receipts', methods=['POST'])
+def create_receipt_record():
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({"error": "Invalid JSON payload."}), 400
+
+        with session_scope() as session:
+            created = create_receipt(session, payload)
+
+        return jsonify(created), 201
+    except Exception as e:
+        logger.error("Failed to create receipt: %s\n%s", str(e), traceback.format_exc())
+        return jsonify({"error": f"Failed to create receipt: {str(e)}"}), 500
+
+
+@app.route('/api/receipts', methods=['GET'])
+def get_receipt_records():
+    try:
+        limit = max(1, min(_parse_int_query_param("limit", 100), 500))
+        offset = max(0, _parse_int_query_param("offset", 0))
+
+        with session_scope() as session:
+            receipts = list_receipts(session, limit=limit, offset=offset)
+
+        return jsonify({"receipts": receipts, "limit": limit, "offset": offset})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("Failed to list receipts: %s\n%s", str(e), traceback.format_exc())
+        return jsonify({"error": f"Failed to list receipts: {str(e)}"}), 500
+
+
+@app.route('/api/receipts/<int:receipt_id>', methods=['GET'])
+def get_receipt_record(receipt_id: int):
+    try:
+        with session_scope() as session:
+            receipt = get_receipt(session, receipt_id)
+        if receipt is None:
+            return jsonify({"error": "Receipt not found."}), 404
+        return jsonify(receipt)
+    except Exception as e:
+        logger.error("Failed to fetch receipt %s: %s\n%s", receipt_id, str(e), traceback.format_exc())
+        return jsonify({"error": f"Failed to fetch receipt: {str(e)}"}), 500
+
+
+@app.route('/api/receipts/<int:receipt_id>/items/<int:item_id>/category', methods=['PATCH'])
+def patch_receipt_item_category(receipt_id: int, item_id: int):
+    try:
+        payload = request.get_json(silent=True) or {}
+        category_name = payload.get("category_name")
+        if not category_name:
+            return jsonify({"error": "'category_name' is required."}), 400
+
+        category_source = payload.get("category_source", "manual")
+        with session_scope() as session:
+            item = update_receipt_item_category(
+                conn=session,
+                receipt_id=receipt_id,
+                item_id=item_id,
+                category_name=category_name,
+                category_source=category_source,
+            )
+        if item is None:
+            return jsonify({"error": "Receipt item not found."}), 404
+        return jsonify(item)
+    except Exception as e:
+        logger.error(
+            "Failed to update category for receipt=%s item=%s: %s\n%s",
+            receipt_id,
+            item_id,
+            str(e),
+            traceback.format_exc(),
+        )
+        return jsonify({"error": f"Failed to update category: {str(e)}"}), 500
+
+
+@app.route('/api/expenses', methods=['POST'])
+def create_expense_record():
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not payload.get("title"):
+            return jsonify({"error": "'title' is required."}), 400
+        if payload.get("amount") is None:
+            return jsonify({"error": "'amount' is required."}), 400
+
+        with session_scope() as session:
+            expense = create_expense(session, payload)
+        return jsonify(expense), 201
+    except Exception as e:
+        logger.error("Failed to create expense: %s\n%s", str(e), traceback.format_exc())
+        return jsonify({"error": f"Failed to create expense: {str(e)}"}), 500
+
+
+@app.route('/api/expenses', methods=['GET'])
+def get_expense_records():
+    try:
+        limit = max(1, min(_parse_int_query_param("limit", 500), 2000))
+        start_date = _parse_iso_date(request.args.get("start_date"), "start_date")
+        end_date = _parse_iso_date(request.args.get("end_date"), "end_date")
+        category_name = request.args.get("category_name")
+
+        with session_scope() as session:
+            expenses = list_expenses(
+                conn=session,
+                start_date=start_date,
+                end_date=end_date,
+                category_name=category_name,
+                limit=limit,
+            )
+        return jsonify({"expenses": expenses, "limit": limit})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("Failed to list expenses: %s\n%s", str(e), traceback.format_exc())
+        return jsonify({"error": f"Failed to list expenses: {str(e)}"}), 500
+
+
+@app.route('/api/dashboard/monthly', methods=['GET'])
+def monthly_dashboard():
+    try:
+        today = date.today()
+        year = _parse_int_query_param("year", today.year)
+        month = _parse_int_query_param("month", today.month)
+        if month < 1 or month > 12:
+            return jsonify({"error": "'month' must be between 1 and 12."}), 400
+
+        with session_scope() as session:
+            report = monthly_category_breakdown(session, year=year, month=month)
+        return jsonify(report)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error("Failed to build monthly dashboard: %s\n%s", str(e), traceback.format_exc())
+        return jsonify({"error": f"Failed to build monthly dashboard: {str(e)}"}), 500
+# --- End Persistence API Endpoints ---
 
 
 @app.route('/', defaults={'path': ''})

@@ -1,7 +1,6 @@
 // src/components/BillUploader.js
 import React from 'react';
 import { Box, Typography, Button, Paper, CircularProgress } from '@mui/material';
-import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 // import APIKeyInput from './APIKeyInput';

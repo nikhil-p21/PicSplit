@@ -8,6 +8,24 @@ PicSplit is a web app that allows users to split bills from images easily. Uploa
 - Splits bills fairly among participants.
 - User-friendly interface powered by Streamlit.
 - Uses Poetry for package management.
+- Local persistence for receipts and expenses via SQLite.
+
+## Backend Persistence APIs (Phase 2)
+
+The Flask backend now includes local data persistence for receipts, items, and expenses.
+
+- `GET /api/health` - service + persistence health check.
+- `GET /api/categories` - default expense categories.
+- `POST /api/receipts` - save receipt metadata/items/participants/splits.
+- `GET /api/receipts` - list saved receipts.
+- `GET /api/receipts/<receipt_id>` - fetch one receipt with nested items/splits.
+- `PATCH /api/receipts/<receipt_id>/items/<item_id>/category` - manual category override.
+- `POST /api/expenses` - create a standalone expense record.
+- `GET /api/expenses` - query expenses by date/category.
+- `GET /api/dashboard/monthly?year=YYYY&month=MM` - monthly category breakdown for dashboard.
+
+Local DB file:
+- `backend/data/expenses.db` (ignored in git).
 
 ## Prerequisites
 
@@ -77,4 +95,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Contact
 
 For any questions or suggestions, feel free to reach out!
-

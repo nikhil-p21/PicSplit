@@ -1,6 +1,6 @@
 // src/App.js
 import React, { useState, useEffect } from 'react';
-import { Container, Box, Typography, Button, Grid, CircularProgress, Avatar, Chip } from '@mui/material';
+import { Container, Box, Typography, Button, Grid, Avatar, Chip } from '@mui/material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import ItemAllocationCard from './components/ItemAllocationCard';
@@ -10,6 +10,16 @@ import BillSummary from './components/BillSummary';
 import Emoji from 'react-emoji-render';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import { createPerson } from './features/billSplit/personProfile';
+import { parseItemEmoji } from './features/billSplit/itemEmoji';
+import {
+  buildInitialSplitState,
+  shareItemEquallyInAllocations,
+  updateAllocationShare,
+  updateAllocationQuantity,
+  validateAllocations,
+  calculateSplitResults
+} from './features/billSplit/splitEngine';
 
 // Create a theme with Japanese-inspired design
 const theme = createTheme({
@@ -67,10 +77,7 @@ function App() {
   // const [loadingKey, setLoadingKey] = useState(true);
   // --- End Removed API Key State ---
 
-  const [persons, setPersons] = useState([
-    { id: 1, name: '', avatarColor: getRandomColor(), emoji: getRandomEmoji() },
-    { id: 2, name: '', avatarColor: getRandomColor(), emoji: getRandomEmoji() }
-  ]);
+  const [persons, setPersons] = useState([createPerson(1), createPerson(2)]);
   const [billImage, setBillImage] = useState(null);
   const [billData, setBillData] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -92,28 +99,8 @@ function App() {
   // Initialize allocations when bill data changes
   useEffect(() => {
     if (billData && billData.items) {
-      const initialAllocations = {};
-      let newCalculatedBillTotal = 0;
-
-      billData.items.forEach(item => {
-        const itemName = item.normalized_name;
-        initialAllocations[itemName] = {
-          totalQuantity: 1, // Default quantity to 1
-          shares: persons.reduce((acc, person) => {
-            acc[person.id] = "0"; // Default share to 0
-            return acc;
-          }, {})
-        };
-
-        // Calculate effective price for each item
-        const priceBeforeTax = item.price_before_tax;
-        const discount = item.discount_amount;
-        const taxRate = (itemName.toLowerCase().includes('plastic') &&
-                         itemName.toLowerCase().includes('bag')) ? 0.10 : 0.08;
-        const effectivePrice = (priceBeforeTax * (1 + taxRate)) - discount;
-        newCalculatedBillTotal += effectivePrice;
-      });
-
+      const { allocations: initialAllocations, calculatedBillTotal: newCalculatedBillTotal } =
+        buildInitialSplitState(billData.items, persons);
       setAllocations(initialAllocations);
       setCalculatedBillTotal(newCalculatedBillTotal);
 
@@ -146,30 +133,11 @@ function App() {
     toast.info(`Item "${itemName}" deleted.`);
   };
 
-  function getRandomColor() {
-    const colors = [
-      '#FF6B6B', '#FF9E7D', '#FFB86F', '#FFD97D',
-      '#C4E177', '#7ECE92', '#6FC2D0', '#7AA2E3',
-      '#9A91E9', '#B78BE8', '#D187C5', '#E37792',
-      '#A56C5D', '#6E7C74', '#4A90A4'
-    ];
-    return colors[Math.floor(Math.random() * colors.length)];
-  }
-
-  function getRandomEmoji() {
-    const emojis = ['🐱', '🐶', '🐼', '🦊', '🐰', '🐻', '🦁', '🐯', '🐨', '🐸', '🐵', '🐷'];
-    return emojis[Math.floor(Math.random() * emojis.length)];
-  }
-
   const addPerson = () => {
+    const nextId = persons.length > 0 ? Math.max(...persons.map(p => p.id)) + 1 : 1;
     setPersons([
       ...persons,
-      {
-        id: persons.length > 0 ? Math.max(...persons.map(p => p.id)) + 1 : 1,
-        name: '',
-        avatarColor: getRandomColor(),
-        emoji: getRandomEmoji()
-      }
+      createPerson(nextId)
     ]);
   };
 
@@ -261,213 +229,49 @@ function App() {
   const shareItemEqually = (itemName) => {
     if (persons.length === 0) return; // Avoid division by zero
 
-    const equalShare = `1/${persons.length}`;
-
     setAllocations(prev => {
-      const newAllocations = { ...prev };
-      // Ensure the item exists in allocations
-      if (!newAllocations[itemName]) {
+      if (!prev[itemName]) {
           console.warn(`Item ${itemName} not found in allocations during shareEqually.`);
-          // Optionally initialize it here if needed based on billData
           return prev; // Or handle initialization
       }
-      const itemAllocation = { ...newAllocations[itemName] };
-
-      itemAllocation.shares = persons.reduce((acc, person) => {
-        acc[person.id] = equalShare;
-        return acc;
-      }, {});
-
-      newAllocations[itemName] = itemAllocation;
-      return newAllocations;
+      return shareItemEquallyInAllocations(prev, itemName, persons);
     });
   };
 
   const updateItemShare = (itemName, personId, shareValue) => {
     setAllocations(prev => {
-      const newAllocations = { ...prev };
-      // Ensure the item exists in allocations
-       if (!newAllocations[itemName]) {
+       if (!prev[itemName]) {
           console.warn(`Item ${itemName} not found in allocations during updateItemShare.`);
           return prev;
       }
-      const itemAllocation = { ...newAllocations[itemName] };
-
-      itemAllocation.shares = {
-        ...itemAllocation.shares,
-        [personId]: shareValue
-      };
-
-      newAllocations[itemName] = itemAllocation;
-      return newAllocations;
+      return updateAllocationShare(prev, itemName, personId, shareValue);
     });
   };
 
   const updateItemQuantity = (itemName, quantity) => {
-    // Ensure quantity is a positive number, default to 1 if invalid
-    const validQuantity = Math.max(1, Number(quantity) || 1);
-
     setAllocations(prev => {
-      const newAllocations = { ...prev };
-       // Ensure the item exists in allocations
-       if (!newAllocations[itemName]) {
+       if (!prev[itemName]) {
           console.warn(`Item ${itemName} not found in allocations during updateItemQuantity.`);
           return prev;
       }
-      newAllocations[itemName] = {
-        ...newAllocations[itemName],
-        totalQuantity: validQuantity
-      };
-      return newAllocations;
+      return updateAllocationQuantity(prev, itemName, quantity);
     });
   };
 
-  const parseItemEmoji = (itemName) => {
-    // Keep your existing emoji logic
-    const emojiMap = {
-      'bread': '🍞', 'milk': '🥛', 'cheese': '🧀', 'egg': '🥚', 'eggs': '🥚', 'tamago': '🥚',
-      'yogurt': '🥣', 'apple': '🍎', 'banana': '🍌', 'orange': '🍊', 'vegetable': '🥬',
-      'vegetables': '🥬', 'fruit': '🍎', 'fruits': '🍎', 'meat': '🥩', 'chicken': '🍗',
-      'fish': '🐟', 'rice': '🍚', 'noodle': '🍜', 'noodles': '🍜', 'pasta': '🍝',
-      'water': '💧', 'juice': '🧃', 'beer': '🍺', 'wine': '🍷', 'coffee': '☕', 'tea': '🍵',
-      'chocolate': '🍫', 'cookie': '🍪', 'cookies': '🍪', 'cake': '🍰', 'icecream': '🍦',
-      'ice cream': '🍦', 'candy': '🍬', 'snack': '🍿', 'snacks': '🍿', 'chip': '🍪',
-      'chips': '🍪', 'plastic bag': '🛍️', 'bag': '🛍️', 'tissue': '🧻', 'paper': '📄',
-      'tofu': '🧊', 'sauce': '🧂', 'oil': '🫗', 'spice': '🌶️', 'spices': '🌶️',
-      'seafood': '🦐', 'shrimp': '🦐', 'crab': '🦀', 'onion': '🧅', 'garlic': '🧄',
-      'tomato': '🍅', 'potato': '🥔', 'carrot': '🥕', 'cucumber': '🥒', 'avocado': '🥑',
-      'corn': '🌽', 'mushroom': '🍄', 'mushrooms': '🍄', 'lemon': '🍋', 'strawberry': '🍓',
-      'strawberries': '🍓', 'pineapple': '🍍', 'watermelon': '🍉'
-    };
-    const lowerName = itemName.toLowerCase();
-    if (emojiMap[lowerName]) return emojiMap[lowerName];
-    for (const [key, emoji] of Object.entries(emojiMap)) {
-      if (lowerName.includes(key)) return emoji;
-    }
-    return '🛒'; // Default
-  };
-
   const calculateSplit = () => {
-    let isValid = true;
-    const allocationErrors = [];
-
     if (!billData || !billData.items) {
         toast.error("Bill data is missing.");
         return;
     }
 
-    // Validate allocations first
-    for (const item of billData.items) {
-      const itemName = item.normalized_name;
-      const allocation = allocations[itemName];
-
-      if (!allocation) {
-        // This might happen if allocations weren't initialized correctly after bill processing
-        allocationErrors.push(`${itemName}: Allocation data missing.`);
-        isValid = false;
-        continue; // Skip further checks for this item
-      }
-
-      let totalShareValue = 0;
-      let invalidShareFormat = false;
-
-      for (const share of Object.values(allocation.shares)) {
-        let value = 0;
-        const trimmedShare = String(share).trim(); // Ensure it's a string and trim whitespace
-
-        if (trimmedShare === "") { // Treat empty string as 0
-            value = 0;
-        } else if (trimmedShare.includes('/')) {
-          const parts = trimmedShare.split('/');
-          if (parts.length === 2 && !isNaN(parseFloat(parts[0])) && !isNaN(parseFloat(parts[1])) && parseFloat(parts[1]) !== 0) {
-            value = parseFloat(parts[0]) / parseFloat(parts[1]);
-          } else {
-            invalidShareFormat = true; // Invalid fraction format
-          }
-        } else {
-          if (!isNaN(parseFloat(trimmedShare))) {
-            value = parseFloat(trimmedShare);
-          } else {
-              invalidShareFormat = true; // Not a valid number or fraction
-          }
-        }
-        if (value < 0) invalidShareFormat = true; // Shares cannot be negative
-        totalShareValue += value;
-      }
-
-      if (invalidShareFormat) {
-          isValid = false;
-          allocationErrors.push(`${itemName}: Invalid share format detected (use numbers like 0.5 or fractions like 1/2). Shares cannot be negative.`);
-      } else if (Math.abs(totalShareValue - allocation.totalQuantity) > 0.001) { // Use tolerance for float comparison
-        isValid = false;
-        allocationErrors.push(`${itemName}: Total allocated share (${totalShareValue.toFixed(2)}) does not match item quantity (${allocation.totalQuantity}).`);
-      }
-    }
-
-
-    if (!isValid) {
+    const validation = validateAllocations(billData.items, allocations);
+    if (!validation.isValid) {
+      const allocationErrors = validation.errors;
       toast.error(<div>Validation Errors:<br/>{allocationErrors.join('<br/>')}</div>, { autoClose: 10000 });
       return;
     }
 
-    // Calculate the split
-    const personTotals = {};
-    persons.forEach(person => {
-      personTotals[person.id] = {
-        name: person.name,
-        avatarColor: person.avatarColor,
-        emoji: person.emoji,
-        total: 0,
-        items: []
-      };
-    });
-
-    billData.items.forEach(item => {
-      const itemName = item.normalized_name;
-      const allocation = allocations[itemName]; // Already validated that this exists
-
-      const priceBeforeTax = item.price_before_tax;
-      const discount = item.discount_amount;
-
-      // Determine tax rate (same logic as before)
-      const taxRate = (itemName.toLowerCase().includes('plastic') &&
-                       itemName.toLowerCase().includes('bag')) ? 0.10 : 0.08;
-
-      // Calculate effective price including tax and discount
-      const itemTotalCost = (priceBeforeTax * (1 + taxRate)) - discount;
-
-      // Avoid division by zero if quantity is somehow invalid (should be caught by validation)
-      const unitCost = allocation.totalQuantity > 0 ? itemTotalCost / allocation.totalQuantity : 0;
-
-      Object.entries(allocation.shares).forEach(([personId, share]) => {
-        let shareValue = 0;
-        const trimmedShare = String(share).trim();
-        if (trimmedShare === "") {
-            shareValue = 0;
-        } else if (trimmedShare.includes('/')) {
-          const [numerator, denominator] = trimmedShare.split('/');
-          // We assume valid format here due to prior validation
-          shareValue = parseFloat(numerator) / parseFloat(denominator);
-        } else {
-          // We assume valid format here due to prior validation
-          shareValue = parseFloat(trimmedShare);
-        }
-
-        const personCostForItem = shareValue * unitCost;
-
-        // Ensure personId exists in personTotals (should always unless person removed mid-calculation)
-        if (personTotals[personId] && personCostForItem > 0) {
-          personTotals[personId].total += personCostForItem;
-          personTotals[personId].items.push({
-            name: itemName,
-            emoji: parseItemEmoji(itemName), // Use your emoji parser
-            share: shareValue, // Store the numeric value of the share
-            cost: personCostForItem
-          });
-        }
-      });
-    });
-
+    const personTotals = calculateSplitResults(billData.items, allocations, persons, parseItemEmoji);
     setSplitResults(personTotals);
     setCurrentStep(4);
   };
