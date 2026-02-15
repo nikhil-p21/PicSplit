@@ -27,6 +27,29 @@ The Flask backend now includes local data persistence for receipts, items, and e
 Local DB file:
 - `backend/data/expenses.db` (ignored in git).
 
+## Receipt Ingestion Pipeline (Phase 3)
+
+`POST /api/process-bill` now runs a staged ingestion flow:
+1. Validate multipart request and image
+2. OCR + translation extraction via `gemini-2.0-flash`
+3. Parse/normalize item output
+4. Persist receipt + items to local SQLite (enabled by default)
+
+Backward compatibility:
+- Existing split flow still receives `items` + `total_bill` in the response.
+- Additional metadata is included: `persisted`, `receipt_id`, `ingestion_stage`.
+
+Optional multipart form fields:
+- `persist` (`true|false`, default `true`)
+- `fail_on_persist_error` (`true|false`, default `false`)
+- `split_enabled`, `is_shared` (`true|false`)
+- `participants` (JSON array)
+- `allocations` (JSON object keyed by normalized item name)
+- `merchant_name`, `receipt_date`, `currency`, `notes`, `source_type`
+
+Alias endpoint:
+- `POST /api/ingest-receipt` (same behavior as `/api/process-bill`)
+
 ## Prerequisites
 
 Ensure you have **Poetry** installed. If not, install it using:

@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from fractions import Fraction
 import io
 import os
+import json
 import traceback
 import logging
 from pathlib import Path # Added for robust .env loading
@@ -87,6 +88,179 @@ class BillItem(BaseModel):
 class Bill(BaseModel):
     items: List[BillItem]
     total_bill: float
+
+
+PROCESS_BILL_PROMPT = """
+You are given a supermarket grocery bill in Japanese that may have been OCRed and translated.
+The person who has the bill does not know Japanese and needs to translate the bill into English in order to split it manually with friends.
+For supermarket bills, note that if an item has a discount, the discount is mentioned on the line immediately below the item and starts with "code128割引". The value shown on the discount line is the amount of the discount. Associate this discount value with the item immediately preceding it.
+
+Extract the following details:
+
+1. For each *actual purchased item* (ignore discount lines in the final item list), output:
+   - "original_name": the original text of the item as recognized.
+   - "normalized_name": a cleaned-up, common name for the item in plain English. Use your best judgment.
+   - "price_before_tax": the base price as a number.
+   - "discount_amount": the discount on *that* specific item as a positive number. If there is no discount associated with it, output 0.
+   - "emoji": an appropriate emoji that represents this item.
+
+2. Also extract the total bill amount as "total_bill".
+
+Return a JSON object that conforms to this schema:
+{
+  "items": [
+    {
+      "original_name": "string",
+      "normalized_name": "string",
+      "price_before_tax": number,
+      "discount_amount": number,
+      "emoji": "string"
+    },
+    ...
+  ],
+  "total_bill": number
+}
+
+Return *only* the JSON object with no additional text or markdown formatting.
+"""
+
+
+def _parse_bool_form_value(value: Optional[str], default: bool = False) -> bool:
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_json_form_value(field_name: str, default: Any) -> Any:
+    raw = request.form.get(field_name)
+    if raw in (None, ""):
+        return default
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON for form field '{field_name}': {str(e)}")
+
+
+def _clean_model_json_text(response_text: str) -> str:
+    text = response_text.strip()
+    if "```json" in text:
+        return text.split("```json", 1)[1].split("```", 1)[0].strip()
+    if "```" in text:
+        return text.split("```", 1)[1].split("```", 1)[0].strip()
+    return text
+
+
+def _parse_share_value(share_text: Any) -> float:
+    parsed = parse_fraction(str(share_text).strip()) if share_text is not None else Fraction(0)
+    try:
+        value = float(parsed)
+    except Exception:
+        return 0.0
+    return value if value > 0 else 0.0
+
+
+def _infer_category_from_item_name(item_name: str) -> str:
+    name = item_name.lower()
+    category_rules = [
+        ("Groceries", ["egg", "eggs", "milk", "bread", "rice", "vegetable", "fruit", "meat", "fish", "tofu"]),
+        ("Dining", ["bento", "sandwich", "meal", "lunch", "dinner", "coffee", "tea"]),
+        ("Healthcare", ["medicine", "vitamin", "mask", "supplement"]),
+        ("Miscellaneous", ["detergent", "tissue", "paper", "cleaner", "soap"]),
+    ]
+    for category, keywords in category_rules:
+        if any(keyword in name for keyword in keywords):
+            return category
+    return "Uncategorized"
+
+
+def _build_receipt_payload_from_ingestion(
+    bill_data: Dict[str, Any],
+    image_filename: Optional[str],
+    metadata: Dict[str, Any],
+    raw_ocr_payload: Dict[str, Any],
+) -> Dict[str, Any]:
+    participants = metadata.get("participants") or []
+    allocations = metadata.get("allocations") or {}
+
+    payload_items: List[Dict[str, Any]] = []
+    for item in bill_data.get("items", []):
+        item_name = item.get("normalized_name", "Unnamed item")
+        item_allocation = allocations.get(item_name, {})
+        total_quantity = float(item_allocation.get("totalQuantity", 1) or 1)
+        shares = item_allocation.get("shares", {})
+
+        tax_rate = get_tax_rate(item_name)
+        price_before_tax = float(item.get("price_before_tax", 0.0))
+        discount_amount = float(item.get("discount_amount", 0.0))
+        effective_total = (price_before_tax * (1 + tax_rate)) - discount_amount
+
+        split_rows: List[Dict[str, Any]] = []
+        if isinstance(shares, dict) and participants:
+            unit_cost = effective_total / total_quantity if total_quantity > 0 else 0.0
+            for participant in participants:
+                participant_name = participant.get("name")
+                if not participant_name:
+                    continue
+
+                share_text = shares.get(str(participant.get("id")))
+                if share_text is None and participant.get("id") is not None:
+                    share_text = shares.get(participant.get("id"))
+                if share_text is None:
+                    continue
+
+                share_value = _parse_share_value(share_text)
+                if share_value <= 0:
+                    continue
+
+                split_rows.append({
+                    "participant_name": participant_name,
+                    "share_text": str(share_text),
+                    "share_value": share_value,
+                    "allocated_cost": share_value * unit_cost,
+                })
+
+        payload_items.append({
+            "original_name": item.get("original_name", item_name),
+            "normalized_name": item_name,
+            "quantity": total_quantity,
+            "price_before_tax": price_before_tax,
+            "discount_amount": discount_amount,
+            "tax_rate": tax_rate,
+            "effective_total": effective_total,
+            "emoji": item.get("emoji"),
+            "category_name": _infer_category_from_item_name(item_name),
+            "category_source": "auto",
+            "splits": split_rows,
+        })
+
+    return {
+        "merchant_name": metadata.get("merchant_name"),
+        "receipt_date": metadata.get("receipt_date"),
+        "currency": metadata.get("currency", "JPY"),
+        "total_amount": bill_data.get("total_bill"),
+        "extracted_total": bill_data.get("total_bill"),
+        "is_shared": metadata.get("is_shared", False),
+        "split_enabled": metadata.get("split_enabled", False),
+        "source_type": metadata.get("source_type", "uploaded_receipt"),
+        "image_filename": image_filename,
+        "raw_ocr_json": raw_ocr_payload,
+        "notes": metadata.get("notes"),
+        "participants": [
+            {
+                "name": participant.get("name"),
+                "avatar_color": participant.get("avatar_color", participant.get("avatarColor")),
+                "emoji": participant.get("emoji"),
+            }
+            for participant in participants
+            if participant.get("name")
+        ],
+        "items": payload_items,
+    }
 
 def get_tax_rate(item_name: str) -> float:
     name_lower = item_name.lower()
@@ -330,6 +504,7 @@ def serve(path):
 
 # --- API Endpoint (/api/process-bill) ---
 @app.route('/api/process-bill', methods=['POST'])
+@app.route('/api/ingest-receipt', methods=['POST'])
 def process_bill():
     # ---> Check if server API key was loaded correctly <---
     if not server_api_key:
@@ -343,88 +518,104 @@ def process_bill():
         #     return jsonify({"error": "API key is required"}), 400 # REMOVED
         # --- End REMOVED ---
 
-        # Get the uploaded image (Keep as original)
+        # Stage 1: Validate request + get uploaded image
         if 'image' not in request.files:
             return jsonify({"error": "No image provided"}), 400
         image_file = request.files['image']
+        image_filename = image_file.filename
 
-        # Process the image (Keep as original)
+        should_persist = _parse_bool_form_value(request.form.get("persist"), default=True)
+        fail_on_persist_error = _parse_bool_form_value(request.form.get("fail_on_persist_error"), default=False)
+        split_enabled = _parse_bool_form_value(request.form.get("split_enabled"), default=False)
+        is_shared = _parse_bool_form_value(request.form.get("is_shared"), default=split_enabled)
+
         try:
-            image = Image.open(io.BytesIO(image_file.read()))
+            participants = _parse_json_form_value("participants", default=[])
+            allocations = _parse_json_form_value("allocations", default={})
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+
+        # Stage 2: Load image
+        try:
+            image_bytes = image_file.read()
+            image = Image.open(io.BytesIO(image_bytes))
         except Exception as e:
             logger.error(f"Error opening image: {str(e)}")
             return jsonify({"error": f"Failed to open the image: {str(e)}"}), 400
 
+        # Stage 3: Initialize AI client
         try:
-            # Use the server_api_key loaded from environment variable
             client = genai.Client(api_key=server_api_key)
         except Exception as e:
              logger.error(f"Failed to initialize GenAI client: {str(e)}")
              return jsonify({"error": "Failed to initialize AI service."}), 500
 
-
-        # Prepare the prompt
-        prompt = """
-You are given a supermarket grocery bill in Japanese that may have been OCRed and translated.
-The person who has the bill does not know Japanese and needs to translate the bill into English in order to split it manually with friends.
-For supermarket bills, note that if an item has a discount, the discount is mentioned on the line immediately below the item and starts with "code128割引". The value shown on the discount line is the amount of the discount. Associate this discount value with the item immediately preceding it.
-
-Extract the following details:
-
-1. For each *actual purchased item* (ignore discount lines in the final item list), output:
-   - "original_name": the original text of the item as recognized.
-   - "normalized_name": a cleaned-up, common name for the item in plain English. Use your best judgment.
-   - "price_before_tax": the base price as a number.
-   - "discount_amount": the discount on *that* specific item as a positive number. If there is no discount associated with it, output 0.
-   - "emoji": an appropriate emoji that represents this item.
-
-2. Also extract the total bill amount as "total_bill".
-
-Return a JSON object that conforms to this schema:
-{
-  "items": [
-    {
-      "original_name": "string",
-      "normalized_name": "string",
-      "price_before_tax": number,
-      "discount_amount": number,
-      "emoji": "string"
-    },
-    ...
-  ],
-  "total_bill": number
-}
-
-Return *only* the JSON object with no additional text or markdown formatting.
-"""
-
+        # Stage 4: OCR + extraction with Gemini
         try:
             response = client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=[prompt, image]
+                contents=[PROCESS_BILL_PROMPT, image]
             )
         except Exception as e:
             logger.error(f"GenAI content generation failed: {str(e)}\nTraceback: {traceback.format_exc()}")
             return jsonify({"error": f"AI model processing failed: {str(e)}"}), 500
 
-
+        # Stage 5: Parse and normalize extraction output
+        raw_response_text = getattr(response, 'text', '')
         try:
-            response_text = response.text
-            if "```json" in response_text:
-                response_text = response_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in response_text:
-                response_text = response_text.split("```")[1].strip()
-
-            # Use Pydantic (Keep as original)
-            bill_data_raw = Bill.parse_raw(response_text).dict()
+            response_json_text = _clean_model_json_text(raw_response_text)
+            bill_data_raw = Bill.parse_raw(response_json_text).dict()
 
             bill_data_merged = merge_discount_items(bill_data_raw) # Ensure discounts are handled
             bill_data_final = make_item_keys_unique(bill_data_merged)
+            raw_ocr_payload = {
+                "model": "gemini-2.0-flash",
+                "response_text": raw_response_text,
+                "parsed_json_text": response_json_text,
+            }
 
-            return jsonify(bill_data_final)
+            # Stage 6: Persist extracted receipt (optional, enabled by default)
+            receipt_id = None
+            persistence_warning = None
+            if should_persist:
+                receipt_metadata = {
+                    "merchant_name": request.form.get("merchant_name"),
+                    "receipt_date": request.form.get("receipt_date"),
+                    "currency": request.form.get("currency") or "JPY",
+                    "source_type": request.form.get("source_type") or "uploaded_receipt",
+                    "notes": request.form.get("notes"),
+                    "split_enabled": split_enabled,
+                    "is_shared": is_shared,
+                    "participants": participants if isinstance(participants, list) else [],
+                    "allocations": allocations if isinstance(allocations, dict) else {},
+                }
+
+                try:
+                    receipt_payload = _build_receipt_payload_from_ingestion(
+                        bill_data=bill_data_final,
+                        image_filename=image_filename,
+                        metadata=receipt_metadata,
+                        raw_ocr_payload=raw_ocr_payload,
+                    )
+                    with session_scope() as session:
+                        created_receipt = create_receipt(session, receipt_payload)
+                    receipt_id = created_receipt.get("id")
+                except Exception as e:
+                    logger.error("Receipt persistence failed: %s\n%s", str(e), traceback.format_exc())
+                    if fail_on_persist_error:
+                        return jsonify({"error": f"Failed to persist processed receipt: {str(e)}"}), 500
+                    persistence_warning = f"Receipt processed but not saved: {str(e)}"
+
+            response_payload = {**bill_data_final}
+            response_payload["persisted"] = bool(receipt_id)
+            response_payload["receipt_id"] = receipt_id
+            response_payload["ingestion_stage"] = "complete"
+            if persistence_warning:
+                response_payload["persistence_warning"] = persistence_warning
+
+            return jsonify(response_payload)
 
         except Exception as e:
-            raw_response_text = getattr(response, 'text', 'Response object has no text attribute')
             logger.error(f"Error parsing model response: {str(e)}\nTraceback: {traceback.format_exc()}\nResponse text: {raw_response_text}")
             return jsonify({"error": f"Failed to parse model response: {str(e)}", "raw_response": raw_response_text}), 500
 
