@@ -1,5 +1,20 @@
 import React, { useState } from 'react';
-import { Card, CardContent, Typography, Box, TextField, Button, Divider, Avatar, Alert, IconButton } from '@mui/material';
+import {
+  Card,
+  CardContent,
+  Typography,
+  Box,
+  TextField,
+  Button,
+  Divider,
+  Avatar,
+  Alert,
+  IconButton,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem
+} from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import Emoji from 'react-emoji-render';
 
@@ -11,7 +26,10 @@ const ItemAllocationCard = ({
   onUpdateShare,
   onUpdateQuantity,
   itemEmoji,
-  onDeleteItem // Add onDeleteItem to props
+  onDeleteItem, // Add onDeleteItem to props
+  categories = [],
+  onUpdateCategory,
+  isUpdatingCategory = false
 }) => {
   // Keep track of which fields are currently being edited
   const [editing, setEditing] = useState({});
@@ -165,6 +183,29 @@ const ItemAllocationCard = ({
           )}
           <Typography variant="body2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center' }}>
             <span role="img" aria-label="total">🧮</span> ¥{effectivePrice.toFixed(2)}
+          </Typography>
+        </Box>
+
+        {/* Category Selector */}
+        <Box sx={{ mb: 2 }}>
+          <FormControl fullWidth size="small">
+            <InputLabel id={`category-label-${item.id || item.normalized_name}`}>Category</InputLabel>
+            <Select
+              labelId={`category-label-${item.id || item.normalized_name}`}
+              label="Category"
+              value={item.category_name || "Uncategorized"}
+              onChange={(e) => onUpdateCategory && onUpdateCategory(e.target.value)}
+              disabled={!onUpdateCategory || isUpdatingCategory}
+            >
+              {categories.map((category) => (
+                <MenuItem key={category} value={category}>
+                  {category}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Typography variant="caption" color="text.secondary">
+            Source: {item.category_source || "auto"} {isUpdatingCategory ? "(saving...)" : ""}
           </Typography>
         </Box>
         

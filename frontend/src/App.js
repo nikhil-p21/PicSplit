@@ -1,12 +1,14 @@
 // src/App.js
 import React, { useState, useEffect } from 'react';
-import { Container, Box, Typography, Button, Grid, Avatar, Chip } from '@mui/material';
+import { Container, Box, Typography, Button, Grid, Avatar, Chip, Tabs, Tab, Paper } from '@mui/material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import ItemAllocationCard from './components/ItemAllocationCard';
 import PersonSetup from './components/PersonSetup';
 import BillUploader from './components/BillUploader';
 import BillSummary from './components/BillSummary';
+import ExpenseDashboard from './components/ExpenseDashboard';
+import ReceiptLibrary from './components/ReceiptLibrary';
 import Emoji from 'react-emoji-render';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -71,6 +73,21 @@ const theme = createTheme({
   },
 });
 
+const DEFAULT_CATEGORIES = [
+  'Groceries',
+  'Dining',
+  'Transport',
+  'Utilities',
+  'Entertainment',
+  'Shopping',
+  'Healthcare',
+  'Travel',
+  'Education',
+  'Subscriptions',
+  'Miscellaneous',
+  'Uncategorized'
+];
+
 function App() {
   // --- REMOVED API Key State ---
   // const [apiKey, setApiKey] = useState(null);
@@ -82,9 +99,12 @@ function App() {
   const [billData, setBillData] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [allocations, setAllocations] = useState({});
+  const [activeView, setActiveView] = useState('dashboard');
   const [currentStep, setCurrentStep] = useState(1);
   const [splitResults, setSplitResults] = useState(null);
   const [calculatedBillTotal, setCalculatedBillTotal] = useState(0);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [categoryUpdateByItem, setCategoryUpdateByItem] = useState({});
 
   // --- REMOVED useEffect for fetching API Key ---
   // useEffect(() => {
@@ -111,6 +131,22 @@ function App() {
         setCalculatedBillTotal(0); // Reset calculated total as well
     }
   }, [billData, persons]); // Rerun when billData or persons change
+
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const response = await fetch('/api/categories');
+        const data = await response.json();
+        if (response.ok && Array.isArray(data?.categories) && data.categories.length > 0) {
+          setCategories(data.categories);
+        }
+      } catch (error) {
+        console.error('Failed to load categories:', error);
+      }
+    };
+
+    loadCategories();
+  }, []);
 
   const deleteItem = (itemName) => {
     if (!billData || !billData.items) return;
@@ -190,6 +226,17 @@ function App() {
 
     const formData = new FormData();
     formData.append('image', billImage);
+    formData.append('persist', 'true');
+    formData.append('split_enabled', 'true');
+    formData.append('is_shared', 'true');
+    formData.append('participants', JSON.stringify(
+      persons.map(person => ({
+        id: person.id,
+        name: person.name,
+        avatarColor: person.avatarColor,
+        emoji: person.emoji
+      }))
+    ));
     // --- REMOVED Appending API Key ---
     // formData.append('api_key', apiKey); // Removed
     // --- End Removed Appending API Key ---
@@ -211,8 +258,21 @@ function App() {
       }
 
       // If response is ok, data should contain the bill details
-      setBillData(data);
+      const normalizedItems = (data.items || []).map(item => ({
+        ...item,
+        category_name: item.category_name || 'Uncategorized',
+        category_source: item.category_source || 'auto'
+      }));
+
+      setBillData({
+        ...data,
+        items: normalizedItems
+      });
+      setActiveView('split');
       setCurrentStep(3);
+      if (data.persistence_warning) {
+        toast.warn(data.persistence_warning);
+      }
       toast.success("Bill processed successfully!");
 
     } catch (error) {
@@ -223,6 +283,76 @@ function App() {
       // setBillData(null);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const updateItemCategory = async (item, categoryName) => {
+    if (!billData || !billData.items) return;
+    const previousCategory = item.category_name || 'Uncategorized';
+    const previousSource = item.category_source || 'auto';
+    const itemId = item.id;
+
+    setBillData(prevBillData => ({
+      ...prevBillData,
+      items: prevBillData.items.map(existingItem =>
+        existingItem.normalized_name === item.normalized_name
+          ? { ...existingItem, category_name: categoryName, category_source: 'manual' }
+          : existingItem
+      )
+    }));
+
+    if (!billData.receipt_id || !itemId) {
+      return;
+    }
+
+    setCategoryUpdateByItem(prev => ({ ...prev, [itemId]: true }));
+    try {
+      const response = await fetch(
+        `/api/receipts/${billData.receipt_id}/items/${itemId}/category`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category_name: categoryName,
+            category_source: 'manual'
+          })
+        }
+      );
+
+      const responseData = await response.json();
+      if (!response.ok) {
+        throw new Error(responseData?.error || `Error ${response.status}`);
+      }
+
+      setBillData(prevBillData => ({
+        ...prevBillData,
+        items: prevBillData.items.map(existingItem =>
+          existingItem.id === itemId
+            ? {
+                ...existingItem,
+                category_name: responseData.category_name || categoryName,
+                category_source: responseData.category_source || 'manual'
+              }
+            : existingItem
+        )
+      }));
+    } catch (error) {
+      console.error('Failed to update category:', error);
+      toast.error(`Failed to save category: ${error.message}`);
+      setBillData(prevBillData => ({
+        ...prevBillData,
+        items: prevBillData.items.map(existingItem =>
+          existingItem.id === itemId
+            ? {
+                ...existingItem,
+                category_name: previousCategory,
+                category_source: previousSource
+              }
+            : existingItem
+        )
+      }));
+    } finally {
+      setCategoryUpdateByItem(prev => ({ ...prev, [itemId]: false }));
     }
   };
 
@@ -402,6 +532,9 @@ function App() {
                       onUpdateQuantity={(qty) => updateItemQuantity(item.normalized_name, qty)}
                       itemEmoji={parseItemEmoji(item.normalized_name)}
                       onDeleteItem={() => deleteItem(item.normalized_name)} // Pass deleteItem function
+                      categories={categories}
+                      onUpdateCategory={(categoryName) => updateItemCategory(item, categoryName)}
+                      isUpdatingCategory={Boolean(categoryUpdateByItem[item.id])}
                     />
                   </Grid>
                 );
@@ -464,31 +597,58 @@ function App() {
             <span role="img" aria-label="receipt">🧾</span> PicSplit
           </Typography>
           <Typography variant="h6" color="text.secondary">
-            Split Japanese bills easily with AI translation
+            Expense tracking with optional bill splitting
           </Typography>
         </Box>
 
-        {/* Step Indicator */}
         <Box sx={{ mb: 4 }}>
-          {/* Using a simple indicator, replace with your 'steps' CSS/component if needed */}
-           <Box sx={{ display: 'flex', justifyContent: 'space-around', mb: 4, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-             {['Add People', 'Upload Bill', 'Allocate Items', 'View Split'].map((step, index) => (
-               <Button
-                 key={index}
-                 variant={currentStep === index + 1 ? 'contained' : 'text'}
-                 onClick={() => navigateToStep(index + 1)}
-                 disabled={index + 1 > currentStep && !(index + 1 === currentStep + 1 && currentStep < 4)} // Allow clicking current/previous, or next if conditions met
-                 sx={{ flexGrow: 1, mx: 0.5 }}
-               >
-                 {step}
-               </Button>
-             ))}
-           </Box>
+          <Paper elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+            <Tabs
+              value={activeView}
+              onChange={(_event, value) => setActiveView(value)}
+              variant="fullWidth"
+              textColor="primary"
+              indicatorColor="primary"
+            >
+              <Tab label="Dashboard" value="dashboard" />
+              <Tab label="Receipts" value="receipts" />
+              <Tab label="Split Bill" value="split" />
+            </Tabs>
+          </Paper>
         </Box>
 
         {/* Main Content Area */}
         <Box sx={{ mt: 3 }}>
-          {renderStepContent()}
+          {activeView === 'dashboard' ? (
+            <ExpenseDashboard />
+          ) : null}
+
+          {activeView === 'receipts' ? (
+            <ReceiptLibrary />
+          ) : null}
+
+          {activeView === 'split' ? (
+            <Box>
+              {/* Step Indicator */}
+              <Box sx={{ mb: 4 }}>
+                 <Box sx={{ display: 'flex', justifyContent: 'space-around', mb: 4, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                   {['Add People', 'Upload Bill', 'Allocate Items', 'View Split'].map((step, index) => (
+                     <Button
+                       key={index}
+                       variant={currentStep === index + 1 ? 'contained' : 'text'}
+                       onClick={() => navigateToStep(index + 1)}
+                       disabled={index + 1 > currentStep && !(index + 1 === currentStep + 1 && currentStep < 4)}
+                       sx={{ flexGrow: 1, mx: 0.5 }}
+                     >
+                       {step}
+                     </Button>
+                   ))}
+                 </Box>
+              </Box>
+
+              {renderStepContent()}
+            </Box>
+          ) : null}
         </Box>
       </Container>
     </ThemeProvider>

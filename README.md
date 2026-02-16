@@ -50,6 +50,30 @@ Optional multipart form fields:
 Alias endpoint:
 - `POST /api/ingest-receipt` (same behavior as `/api/process-bill`)
 
+## Categorization System (Phase 4)
+
+Automatic categorization:
+- OCR-extracted items are now auto-categorized during receipt ingestion.
+- `/api/process-bill` response items include:
+  - `category_name`
+  - `category_source` (`auto` by default)
+  - `id` (when persistence succeeds)
+
+Categorization APIs:
+- `POST /api/categorize-items` - categorize an array of item objects.
+- `PATCH /api/receipts/<receipt_id>/items/<item_id>/category` - manual category override (`category_source` becomes `manual`).
+
+Current split UI support:
+- Allocation cards now show a category dropdown.
+- Category changes are persisted via the PATCH endpoint when `receipt_id` + `item.id` are available.
+
+## App Navigation (Phase 5)
+
+The frontend now has a multi-view app shell with three primary sections:
+- **Dashboard**: monthly spend totals + category visualizations.
+- **Receipts**: saved receipt library with detail view and category override controls.
+- **Split Bill**: existing 4-step bill-splitting workflow preserved for backward compatibility.
+
 ## Prerequisites
 
 Ensure you have **Poetry** installed. If not, install it using:

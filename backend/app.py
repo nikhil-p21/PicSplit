@@ -15,6 +15,11 @@ import logging
 from pathlib import Path # Added for robust .env loading
 
 try:
+    from backend.categorization import EXPENSE_CATEGORIES, categorize_items, infer_item_category
+except ModuleNotFoundError:
+    from categorization import EXPENSE_CATEGORIES, categorize_items, infer_item_category
+
+try:
     from backend.persistence.database import DATABASE_URL, init_db, session_scope
     from backend.persistence.repository import (
         DEFAULT_CATEGORIES,
@@ -164,18 +169,10 @@ def _parse_share_value(share_text: Any) -> float:
     return value if value > 0 else 0.0
 
 
-def _infer_category_from_item_name(item_name: str) -> str:
-    name = item_name.lower()
-    category_rules = [
-        ("Groceries", ["egg", "eggs", "milk", "bread", "rice", "vegetable", "fruit", "meat", "fish", "tofu"]),
-        ("Dining", ["bento", "sandwich", "meal", "lunch", "dinner", "coffee", "tea"]),
-        ("Healthcare", ["medicine", "vitamin", "mask", "supplement"]),
-        ("Miscellaneous", ["detergent", "tissue", "paper", "cleaner", "soap"]),
-    ]
-    for category, keywords in category_rules:
-        if any(keyword in name for keyword in keywords):
-            return category
-    return "Uncategorized"
+def _add_auto_categories_to_bill_data(bill_data: Dict[str, Any]) -> Dict[str, Any]:
+    items = bill_data.get("items", [])
+    bill_data["items"] = categorize_items(items)
+    return bill_data
 
 
 def _build_receipt_payload_from_ingestion(
@@ -233,8 +230,8 @@ def _build_receipt_payload_from_ingestion(
             "tax_rate": tax_rate,
             "effective_total": effective_total,
             "emoji": item.get("emoji"),
-            "category_name": _infer_category_from_item_name(item_name),
-            "category_source": "auto",
+            "category_name": item.get("category_name") or infer_item_category(item_name, item.get("original_name")),
+            "category_source": item.get("category_source", "auto"),
             "splits": split_rows,
         })
 
@@ -350,6 +347,21 @@ def health():
 @app.route('/api/categories', methods=['GET'])
 def categories():
     return jsonify({"categories": DEFAULT_CATEGORIES})
+
+
+@app.route('/api/categorize-items', methods=['POST'])
+def categorize_items_endpoint():
+    try:
+        payload = request.get_json(silent=True) or {}
+        items = payload.get("items")
+        if not isinstance(items, list):
+            return jsonify({"error": "'items' must be an array."}), 400
+
+        categorized = categorize_items(items)
+        return jsonify({"items": categorized, "categories": EXPENSE_CATEGORIES})
+    except Exception as e:
+        logger.error("Failed to categorize items: %s\n%s", str(e), traceback.format_exc())
+        return jsonify({"error": f"Failed to categorize items: {str(e)}"}), 500
 
 
 @app.route('/api/receipts', methods=['POST'])
@@ -568,6 +580,7 @@ def process_bill():
 
             bill_data_merged = merge_discount_items(bill_data_raw) # Ensure discounts are handled
             bill_data_final = make_item_keys_unique(bill_data_merged)
+            bill_data_final = _add_auto_categories_to_bill_data(bill_data_final)
             raw_ocr_payload = {
                 "model": "gemini-2.0-flash",
                 "response_text": raw_response_text,
@@ -576,6 +589,7 @@ def process_bill():
 
             # Stage 6: Persist extracted receipt (optional, enabled by default)
             receipt_id = None
+            created_receipt = None
             persistence_warning = None
             if should_persist:
                 receipt_metadata = {
@@ -610,6 +624,19 @@ def process_bill():
             response_payload["persisted"] = bool(receipt_id)
             response_payload["receipt_id"] = receipt_id
             response_payload["ingestion_stage"] = "complete"
+
+            if receipt_id:
+                persisted_items_by_name = {
+                    persisted_item.get("normalized_name"): persisted_item
+                    for persisted_item in (created_receipt or {}).get("items", [])
+                }
+                for item in response_payload.get("items", []):
+                    persisted_item = persisted_items_by_name.get(item.get("normalized_name"))
+                    if persisted_item:
+                        item["id"] = persisted_item.get("id")
+                        item["category_name"] = persisted_item.get("category_name", item.get("category_name"))
+                        item["category_source"] = persisted_item.get("category_source", item.get("category_source"))
+
             if persistence_warning:
                 response_payload["persistence_warning"] = persistence_warning
 

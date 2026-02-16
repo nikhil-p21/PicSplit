@@ -3,21 +3,13 @@ import sqlite3
 from datetime import date, datetime
 from typing import Any
 
+try:
+    from backend.categorization import EXPENSE_CATEGORIES
+except ModuleNotFoundError:
+    from categorization import EXPENSE_CATEGORIES
 
-DEFAULT_CATEGORIES = [
-    "Groceries",
-    "Dining",
-    "Transport",
-    "Utilities",
-    "Entertainment",
-    "Shopping",
-    "Healthcare",
-    "Travel",
-    "Education",
-    "Subscriptions",
-    "Miscellaneous",
-    "Uncategorized",
-]
+
+DEFAULT_CATEGORIES = EXPENSE_CATEGORIES
 
 
 def _now_iso() -> str:
