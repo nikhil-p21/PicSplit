@@ -86,6 +86,22 @@ The split flow now supports both personal and shared receipt ingestion:
   - No participant metadata is sent (`participants=[]`, `split_enabled=false`, `is_shared=false`).
   - After success, the UI routes to the **Receipts** tab instead of allocation/split steps.
 
+## Stabilization (Phase 7)
+
+Regression coverage was added for the monthly dashboard aggregation logic:
+- `backend/tests/test_monthly_dashboard.py`
+
+What is validated:
+- receipt item totals are included in monthly totals
+- standalone manual expenses are included
+- linked expense rows (`receipt_item_id` present) are excluded to avoid double-counting
+- receipts without `receipt_date` still count for the month via `created_at`
+
+Run tests:
+```sh
+python -m unittest discover -s backend/tests -p "test_*.py"
+```
+
 ## Prerequisites
 
 Ensure you have **Poetry** installed. If not, install it using:
