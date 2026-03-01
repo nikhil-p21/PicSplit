@@ -105,6 +105,11 @@ function App() {
   const [calculatedBillTotal, setCalculatedBillTotal] = useState(0);
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [categoryUpdateByItem, setCategoryUpdateByItem] = useState({});
+  const [isSplitEnabled, setIsSplitEnabled] = useState(true);
+  const splitFlowSteps = isSplitEnabled
+    ? ['Add People', 'Upload Bill', 'Allocate Items', 'View Split']
+    : ['Receipt Mode', 'Upload Bill'];
+  const maxSplitStep = splitFlowSteps.length;
 
   // --- REMOVED useEffect for fetching API Key ---
   // useEffect(() => {
@@ -209,11 +214,13 @@ function App() {
     // if (!apiKey) { ... } // Removed
     // --- End Removed API Key Checks ---
 
-    // Validate that all persons have names
-    const emptyNames = persons.filter(p => !p.name.trim());
-    if (emptyNames.length > 0) {
-      toast.error("Please provide names for all persons");
-      return;
+    // Validate participant names only when split mode is enabled.
+    if (isSplitEnabled) {
+      const emptyNames = persons.filter(p => !p.name.trim());
+      if (emptyNames.length > 0) {
+        toast.error("Please provide names for all persons");
+        return;
+      }
     }
 
     // Validate that an image has been selected
@@ -224,19 +231,23 @@ function App() {
 
     setIsProcessing(true);
 
+    const participantPayload = isSplitEnabled
+      ? persons
+          .filter(person => person.name.trim())
+          .map(person => ({
+            id: person.id,
+            name: person.name.trim(),
+            avatarColor: person.avatarColor,
+            emoji: person.emoji
+          }))
+      : [];
+
     const formData = new FormData();
     formData.append('image', billImage);
     formData.append('persist', 'true');
-    formData.append('split_enabled', 'true');
-    formData.append('is_shared', 'true');
-    formData.append('participants', JSON.stringify(
-      persons.map(person => ({
-        id: person.id,
-        name: person.name,
-        avatarColor: person.avatarColor,
-        emoji: person.emoji
-      }))
-    ));
+    formData.append('split_enabled', isSplitEnabled ? 'true' : 'false');
+    formData.append('is_shared', isSplitEnabled ? 'true' : 'false');
+    formData.append('participants', JSON.stringify(participantPayload));
     // --- REMOVED Appending API Key ---
     // formData.append('api_key', apiKey); // Removed
     // --- End Removed Appending API Key ---
@@ -264,16 +275,27 @@ function App() {
         category_source: item.category_source || 'auto'
       }));
 
-      setBillData({
-        ...data,
-        items: normalizedItems
-      });
-      setActiveView('split');
-      setCurrentStep(3);
+      if (isSplitEnabled) {
+        setBillData({
+          ...data,
+          items: normalizedItems
+        });
+        setActiveView('split');
+        setCurrentStep(3);
+      } else {
+        // Personal receipt mode stores data via backend persistence and exits split flow.
+        setBillData(null);
+        setBillImage(null);
+        setAllocations({});
+        setSplitResults(null);
+        setCalculatedBillTotal(0);
+        setCurrentStep(1);
+        setActiveView('receipts');
+      }
       if (data.persistence_warning) {
         toast.warn(data.persistence_warning);
       }
-      toast.success("Bill processed successfully!");
+      toast.success(isSplitEnabled ? "Bill processed successfully!" : "Receipt processed and saved.");
 
     } catch (error) {
       console.error("Failed to process bill:", error); // Log the detailed error
@@ -408,6 +430,10 @@ function App() {
 
 
   const navigateToStep = (step) => {
+    if (step > maxSplitStep) {
+      return;
+    }
+
     // Allow navigating back freely
     if (step < currentStep) {
       // Reset future steps data if needed when going back
@@ -419,7 +445,7 @@ function App() {
     }
 
     // Validate before moving forward
-    if (step === 2 && currentStep === 1) {
+    if (isSplitEnabled && step === 2 && currentStep === 1) {
       const emptyNames = persons.filter(p => !p.name.trim());
       if (emptyNames.length > 0) {
         toast.error("Please provide names for all persons");
@@ -433,7 +459,7 @@ function App() {
     // Only allow moving forward one step at a time unless specific conditions met
     if (step === currentStep + 1) {
        // Conditions to allow moving forward (e.g., step 1 -> 2 needs names)
-       if (step === 2 && persons.some(p => !p.name.trim())) {
+       if (isSplitEnabled && step === 2 && persons.some(p => !p.name.trim())) {
            toast.error("Please provide names for all persons first.");
            return;
        }
@@ -469,6 +495,8 @@ function App() {
             onRemovePerson={removePerson}
             onUpdatePerson={updatePerson}
             onNext={() => navigateToStep(2)}
+            splitEnabled={isSplitEnabled}
+            onSplitEnabledChange={setIsSplitEnabled}
           />
         );
       case 2:
@@ -480,6 +508,8 @@ function App() {
             onProcessBill={processBill} // This function no longer needs apiKey
             isProcessing={isProcessing}
             onBack={() => navigateToStep(1)}
+            splitEnabled={isSplitEnabled}
+            onSplitEnabledChange={setIsSplitEnabled}
           />
         );
       case 3:
@@ -632,12 +662,12 @@ function App() {
               {/* Step Indicator */}
               <Box sx={{ mb: 4 }}>
                  <Box sx={{ display: 'flex', justifyContent: 'space-around', mb: 4, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-                   {['Add People', 'Upload Bill', 'Allocate Items', 'View Split'].map((step, index) => (
+                   {splitFlowSteps.map((step, index) => (
                      <Button
                        key={index}
                        variant={currentStep === index + 1 ? 'contained' : 'text'}
                        onClick={() => navigateToStep(index + 1)}
-                       disabled={index + 1 > currentStep && !(index + 1 === currentStep + 1 && currentStep < 4)}
+                       disabled={index + 1 > currentStep && !(index + 1 === currentStep + 1 && currentStep < maxSplitStep)}
                        sx={{ flexGrow: 1, mx: 0.5 }}
                      >
                        {step}

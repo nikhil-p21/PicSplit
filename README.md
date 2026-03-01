@@ -74,6 +74,18 @@ The frontend now has a multi-view app shell with three primary sections:
 - **Receipts**: saved receipt library with detail view and category override controls.
 - **Split Bill**: existing 4-step bill-splitting workflow preserved for backward compatibility.
 
+## Optional Split Mode (Phase 6)
+
+The split flow now supports both personal and shared receipt ingestion:
+- Step 1/2 includes a personal vs shared toggle.
+- When **shared** is enabled:
+  - Existing split workflow remains unchanged (`Add People -> Upload Bill -> Allocate Items -> View Split`).
+  - Participant metadata is sent to `/api/process-bill` with `split_enabled=true` and `is_shared=true`.
+- When **personal** is selected:
+  - Receipt is still OCR-processed and persisted.
+  - No participant metadata is sent (`participants=[]`, `split_enabled=false`, `is_shared=false`).
+  - After success, the UI routes to the **Receipts** tab instead of allocation/split steps.
+
 ## Prerequisites
 
 Ensure you have **Poetry** installed. If not, install it using:

@@ -390,16 +390,35 @@ def monthly_category_breakdown(conn: sqlite3.Connection, year: int, month: int) 
 
     rows = conn.execute(
         """
+        WITH normalized_expenses AS (
+            -- Standalone expense entries (do not double count rows already linked to receipt_items)
+            SELECT
+                COALESCE(NULLIF(TRIM(e.category_name), ''), 'Uncategorized') AS category_name,
+                e.amount AS amount
+            FROM expenses e
+            WHERE e.expense_date >= ? AND e.expense_date < ?
+              AND e.receipt_item_id IS NULL
+
+            UNION ALL
+
+            -- Receipt-ingested item rows
+            SELECT
+                COALESCE(NULLIF(TRIM(ri.category_name), ''), 'Uncategorized') AS category_name,
+                ri.effective_total AS amount
+            FROM receipt_items ri
+            INNER JOIN receipts r ON r.id = ri.receipt_id
+            WHERE DATE(COALESCE(NULLIF(r.receipt_date, ''), SUBSTR(r.created_at, 1, 10))) >= ?
+              AND DATE(COALESCE(NULLIF(r.receipt_date, ''), SUBSTR(r.created_at, 1, 10))) < ?
+        )
         SELECT
             category_name,
             SUM(amount) AS total_amount,
-            COUNT(id) AS expense_count
-        FROM expenses
-        WHERE expense_date >= ? AND expense_date < ?
+            COUNT(*) AS expense_count
+        FROM normalized_expenses
         GROUP BY category_name
         ORDER BY total_amount DESC
         """,
-        (start.isoformat(), end.isoformat()),
+        (start.isoformat(), end.isoformat(), start.isoformat(), end.isoformat()),
     ).fetchall()
 
     category_breakdown = [

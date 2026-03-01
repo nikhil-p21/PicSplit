@@ -4,6 +4,7 @@ import {
   Typography,
   Card,
   CardContent,
+  Paper,
   Grid,
   Chip,
   Button,
@@ -224,40 +225,58 @@ const ReceiptLibrary = () => {
 
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5, maxHeight: 420, overflowY: 'auto', pr: 1 }}>
                     {(selectedReceipt.items || []).map((item) => (
-                      <Card key={item.id || `${item.normalized_name}-${item.original_name}`} variant="outlined">
-                        <CardContent sx={{ py: 1.5 }}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2, alignItems: 'center', mb: 1 }}>
-                            <Box>
-                              <Typography variant="subtitle1">{item.normalized_name}</Typography>
-                              <Typography variant="caption" color="text.secondary">
-                                {item.original_name}
-                              </Typography>
-                            </Box>
-                            <Typography sx={{ fontWeight: 700 }}>{formatCurrency(item.effective_total || item.price_before_tax)}</Typography>
+                      <Paper
+                        key={item.id || `${item.normalized_name}-${item.original_name}`}
+                        variant="outlined"
+                        sx={{
+                          p: 1.5,
+                          borderRadius: 2,
+                          backgroundColor: '#fff',
+                        }}
+                      >
+                        <Box
+                          sx={{
+                            display: 'grid',
+                            gridTemplateColumns: { xs: '1fr', sm: '1fr auto' },
+                            gap: 1,
+                            alignItems: { xs: 'flex-start', sm: 'center' },
+                            mb: 1,
+                          }}
+                        >
+                          <Box sx={{ minWidth: 0 }}>
+                            <Typography variant="subtitle1" sx={{ fontWeight: 600, lineHeight: 1.3 }}>
+                              {item.normalized_name}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ wordBreak: 'break-word' }}>
+                              {item.original_name}
+                            </Typography>
                           </Box>
+                          <Typography sx={{ fontWeight: 700, whiteSpace: 'nowrap' }}>
+                            {formatCurrency(item.effective_total || item.price_before_tax)}
+                          </Typography>
+                        </Box>
 
-                          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <FormControl size="small" sx={{ minWidth: 180 }}>
-                              <InputLabel id={`receipt-item-category-${item.id}`}>Category</InputLabel>
-                              <Select
-                                labelId={`receipt-item-category-${item.id}`}
-                                label="Category"
-                                value={item.category_name || 'Uncategorized'}
-                                onChange={(event) => updateItemCategory(selectedReceipt.id, item.id, event.target.value)}
-                                disabled={!item.id || loadingCategories || itemUpdateState[item.id]}
-                              >
-                                {categories.map((category) => (
-                                  <MenuItem key={category} value={category}>
-                                    {category}
-                                  </MenuItem>
-                                ))}
-                              </Select>
-                            </FormControl>
-                            <Chip size="small" label={`Source: ${item.category_source || 'auto'}`} />
-                            {itemUpdateState[item.id] ? <CircularProgress size={16} /> : null}
-                          </Box>
-                        </CardContent>
-                      </Card>
+                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <FormControl size="small" sx={{ minWidth: 220, backgroundColor: '#fff' }}>
+                            <InputLabel id={`receipt-item-category-${item.id}`}>Category</InputLabel>
+                            <Select
+                              labelId={`receipt-item-category-${item.id}`}
+                              label="Category"
+                              value={item.category_name || 'Uncategorized'}
+                              onChange={(event) => updateItemCategory(selectedReceipt.id, item.id, event.target.value)}
+                              disabled={!item.id || loadingCategories || itemUpdateState[item.id]}
+                            >
+                              {categories.map((category) => (
+                                <MenuItem key={category} value={category}>
+                                  {category}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                          </FormControl>
+                          <Chip size="small" label={`Source: ${item.category_source || 'auto'}`} />
+                          {itemUpdateState[item.id] ? <CircularProgress size={16} /> : null}
+                        </Box>
+                      </Paper>
                     ))}
                   </Box>
                 </>
