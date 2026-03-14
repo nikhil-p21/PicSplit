@@ -1,7 +1,6 @@
 // src/components/BillUploader.js
 import React from 'react';
-import { Box, Typography, Button, Paper, CircularProgress } from '@mui/material';
-import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import { Box, Typography, Button, Paper, CircularProgress, FormControlLabel, Switch } from '@mui/material';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import PhotoLibraryIcon from '@mui/icons-material/PhotoLibrary';
 // import APIKeyInput from './APIKeyInput';
@@ -11,7 +10,9 @@ const BillUploader = ({
   selectedImage, 
   onProcessBill, 
   isProcessing,
-  onBack 
+  onBack,
+  splitEnabled = false,
+  onSplitEnabledChange,
 }) => {
   const handleImageChange = (e) => {
     if (e.target.files && e.target.files[0]) {
@@ -25,8 +26,15 @@ const BillUploader = ({
         Upload Your Bill
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
-        Take a clear photo of your Japanese receipt or select an existing photo.
+        Take a clear photo of your receipt or select an existing photo.
       </Typography>
+
+      <Box sx={{ mb: 2 }}>
+        <FormControlLabel
+          control={<Switch checked={splitEnabled} onChange={(event) => onSplitEnabledChange?.(event.target.checked)} />}
+          label={splitEnabled ? 'Split this receipt with friends' : 'Save as personal expense (no split)'}
+        />
+      </Box>
       
       <Paper
         sx={{
@@ -158,7 +166,7 @@ const BillUploader = ({
           disabled={isProcessing || !selectedImage}
           startIcon={isProcessing ? <CircularProgress size={20} color="inherit" /> : null}
         >
-          {isProcessing ? 'Processing...' : 'Process Bill'}
+          {isProcessing ? 'Processing...' : splitEnabled ? 'Process & Split' : 'Process & Save'}
         </Button>
       </Box>
     </Box>

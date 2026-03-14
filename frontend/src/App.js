@@ -1,15 +1,27 @@
 // src/App.js
 import React, { useState, useEffect } from 'react';
-import { Container, Box, Typography, Button, Grid, CircularProgress, Avatar, Chip } from '@mui/material';
+import { Container, Box, Typography, Button, Grid, Avatar, Chip, Tabs, Tab, Paper } from '@mui/material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import ItemAllocationCard from './components/ItemAllocationCard';
 import PersonSetup from './components/PersonSetup';
 import BillUploader from './components/BillUploader';
 import BillSummary from './components/BillSummary';
+import ExpenseDashboard from './components/ExpenseDashboard';
+import ReceiptLibrary from './components/ReceiptLibrary';
 import Emoji from 'react-emoji-render';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
+import { createPerson } from './features/billSplit/personProfile';
+import { parseItemEmoji } from './features/billSplit/itemEmoji';
+import {
+  buildInitialSplitState,
+  shareItemEquallyInAllocations,
+  updateAllocationShare,
+  updateAllocationQuantity,
+  validateAllocations,
+  calculateSplitResults
+} from './features/billSplit/splitEngine';
 
 // Create a theme with Japanese-inspired design
 const theme = createTheme({
@@ -61,22 +73,43 @@ const theme = createTheme({
   },
 });
 
+const DEFAULT_CATEGORIES = [
+  'Groceries',
+  'Dining',
+  'Transport',
+  'Utilities',
+  'Entertainment',
+  'Shopping',
+  'Healthcare',
+  'Travel',
+  'Education',
+  'Subscriptions',
+  'Miscellaneous',
+  'Uncategorized'
+];
+
 function App() {
   // --- REMOVED API Key State ---
   // const [apiKey, setApiKey] = useState(null);
   // const [loadingKey, setLoadingKey] = useState(true);
   // --- End Removed API Key State ---
 
-  const [persons, setPersons] = useState([
-    { id: 1, name: '', avatarColor: getRandomColor(), emoji: getRandomEmoji() },
-    { id: 2, name: '', avatarColor: getRandomColor(), emoji: getRandomEmoji() }
-  ]);
+  const [persons, setPersons] = useState([createPerson(1), createPerson(2)]);
   const [billImage, setBillImage] = useState(null);
   const [billData, setBillData] = useState(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [allocations, setAllocations] = useState({});
+  const [activeView, setActiveView] = useState('dashboard');
   const [currentStep, setCurrentStep] = useState(1);
   const [splitResults, setSplitResults] = useState(null);
+  const [calculatedBillTotal, setCalculatedBillTotal] = useState(0);
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [categoryUpdateByItem, setCategoryUpdateByItem] = useState({});
+  const [isSplitEnabled, setIsSplitEnabled] = useState(true);
+  const splitFlowSteps = isSplitEnabled
+    ? ['Add People', 'Upload Bill', 'Allocate Items', 'View Split']
+    : ['Receipt Mode', 'Upload Bill'];
+  const maxSplitStep = splitFlowSteps.length;
 
   // --- REMOVED useEffect for fetching API Key ---
   // useEffect(() => {
@@ -91,49 +124,61 @@ function App() {
   // Initialize allocations when bill data changes
   useEffect(() => {
     if (billData && billData.items) {
-      const initialAllocations = {};
-      billData.items.forEach(item => {
-        const itemName = item.normalized_name;
-        initialAllocations[itemName] = {
-          totalQuantity: 1, // Default quantity to 1
-          shares: persons.reduce((acc, person) => {
-            acc[person.id] = "0"; // Default share to 0
-            return acc;
-          }, {})
-        };
-      });
+      const { allocations: initialAllocations, calculatedBillTotal: newCalculatedBillTotal } =
+        buildInitialSplitState(billData.items, persons);
       setAllocations(initialAllocations);
+      setCalculatedBillTotal(newCalculatedBillTotal);
+
     }
     // Ensure allocations are cleared or reset if billData becomes null
     else if (!billData) {
         setAllocations({});
+        setCalculatedBillTotal(0); // Reset calculated total as well
     }
   }, [billData, persons]); // Rerun when billData or persons change
 
-  function getRandomColor() {
-    const colors = [
-      '#FF6B6B', '#FF9E7D', '#FFB86F', '#FFD97D',
-      '#C4E177', '#7ECE92', '#6FC2D0', '#7AA2E3',
-      '#9A91E9', '#B78BE8', '#D187C5', '#E37792',
-      '#A56C5D', '#6E7C74', '#4A90A4'
-    ];
-    return colors[Math.floor(Math.random() * colors.length)];
-  }
+  useEffect(() => {
+    const loadCategories = async () => {
+      try {
+        const response = await fetch('/api/categories');
+        const data = await response.json();
+        if (response.ok && Array.isArray(data?.categories) && data.categories.length > 0) {
+          setCategories(data.categories);
+        }
+      } catch (error) {
+        console.error('Failed to load categories:', error);
+      }
+    };
 
-  function getRandomEmoji() {
-    const emojis = ['🐱', '🐶', '🐼', '🦊', '🐰', '🐻', '🦁', '🐯', '🐨', '🐸', '🐵', '🐷'];
-    return emojis[Math.floor(Math.random() * emojis.length)];
-  }
+    loadCategories();
+  }, []);
+
+  const deleteItem = (itemName) => {
+    if (!billData || !billData.items) return;
+
+    const newItemsArray = billData.items.filter(item => item.normalized_name !== itemName);
+    setBillData(prevBillData => ({
+      ...prevBillData,
+      items: newItemsArray
+    }));
+
+    setAllocations(prevAllocations => {
+      const newAllocations = { ...prevAllocations };
+      delete newAllocations[itemName];
+      return newAllocations;
+    });
+
+    // The useEffect hook depending on [billData, persons] will automatically
+    // recalculate calculatedBillTotal and reconstruct allocations for the remaining items.
+    // A toast message for successful deletion
+    toast.info(`Item "${itemName}" deleted.`);
+  };
 
   const addPerson = () => {
+    const nextId = persons.length > 0 ? Math.max(...persons.map(p => p.id)) + 1 : 1;
     setPersons([
       ...persons,
-      {
-        id: persons.length > 0 ? Math.max(...persons.map(p => p.id)) + 1 : 1,
-        name: '',
-        avatarColor: getRandomColor(),
-        emoji: getRandomEmoji()
-      }
+      createPerson(nextId)
     ]);
   };
 
@@ -169,11 +214,13 @@ function App() {
     // if (!apiKey) { ... } // Removed
     // --- End Removed API Key Checks ---
 
-    // Validate that all persons have names
-    const emptyNames = persons.filter(p => !p.name.trim());
-    if (emptyNames.length > 0) {
-      toast.error("Please provide names for all persons");
-      return;
+    // Validate participant names only when split mode is enabled.
+    if (isSplitEnabled) {
+      const emptyNames = persons.filter(p => !p.name.trim());
+      if (emptyNames.length > 0) {
+        toast.error("Please provide names for all persons");
+        return;
+      }
     }
 
     // Validate that an image has been selected
@@ -184,8 +231,23 @@ function App() {
 
     setIsProcessing(true);
 
+    const participantPayload = isSplitEnabled
+      ? persons
+          .filter(person => person.name.trim())
+          .map(person => ({
+            id: person.id,
+            name: person.name.trim(),
+            avatarColor: person.avatarColor,
+            emoji: person.emoji
+          }))
+      : [];
+
     const formData = new FormData();
     formData.append('image', billImage);
+    formData.append('persist', 'true');
+    formData.append('split_enabled', isSplitEnabled ? 'true' : 'false');
+    formData.append('is_shared', isSplitEnabled ? 'true' : 'false');
+    formData.append('participants', JSON.stringify(participantPayload));
     // --- REMOVED Appending API Key ---
     // formData.append('api_key', apiKey); // Removed
     // --- End Removed Appending API Key ---
@@ -207,9 +269,33 @@ function App() {
       }
 
       // If response is ok, data should contain the bill details
-      setBillData(data);
-      setCurrentStep(3);
-      toast.success("Bill processed successfully!");
+      const normalizedItems = (data.items || []).map(item => ({
+        ...item,
+        category_name: item.category_name || 'Uncategorized',
+        category_source: item.category_source || 'auto'
+      }));
+
+      if (isSplitEnabled) {
+        setBillData({
+          ...data,
+          items: normalizedItems
+        });
+        setActiveView('split');
+        setCurrentStep(3);
+      } else {
+        // Personal receipt mode stores data via backend persistence and exits split flow.
+        setBillData(null);
+        setBillImage(null);
+        setAllocations({});
+        setSplitResults(null);
+        setCalculatedBillTotal(0);
+        setCurrentStep(1);
+        setActiveView('receipts');
+      }
+      if (data.persistence_warning) {
+        toast.warn(data.persistence_warning);
+      }
+      toast.success(isSplitEnabled ? "Bill processed successfully!" : "Receipt processed and saved.");
 
     } catch (error) {
       console.error("Failed to process bill:", error); // Log the detailed error
@@ -222,222 +308,132 @@ function App() {
     }
   };
 
+  const updateItemCategory = async (item, categoryName) => {
+    if (!billData || !billData.items) return;
+    const previousCategory = item.category_name || 'Uncategorized';
+    const previousSource = item.category_source || 'auto';
+    const itemId = item.id;
+
+    setBillData(prevBillData => ({
+      ...prevBillData,
+      items: prevBillData.items.map(existingItem =>
+        existingItem.normalized_name === item.normalized_name
+          ? { ...existingItem, category_name: categoryName, category_source: 'manual' }
+          : existingItem
+      )
+    }));
+
+    if (!billData.receipt_id || !itemId) {
+      return;
+    }
+
+    setCategoryUpdateByItem(prev => ({ ...prev, [itemId]: true }));
+    try {
+      const response = await fetch(
+        `/api/receipts/${billData.receipt_id}/items/${itemId}/category`,
+        {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            category_name: categoryName,
+            category_source: 'manual'
+          })
+        }
+      );
+
+      const responseData = await response.json();
+      if (!response.ok) {
+        throw new Error(responseData?.error || `Error ${response.status}`);
+      }
+
+      setBillData(prevBillData => ({
+        ...prevBillData,
+        items: prevBillData.items.map(existingItem =>
+          existingItem.id === itemId
+            ? {
+                ...existingItem,
+                category_name: responseData.category_name || categoryName,
+                category_source: responseData.category_source || 'manual'
+              }
+            : existingItem
+        )
+      }));
+    } catch (error) {
+      console.error('Failed to update category:', error);
+      toast.error(`Failed to save category: ${error.message}`);
+      setBillData(prevBillData => ({
+        ...prevBillData,
+        items: prevBillData.items.map(existingItem =>
+          existingItem.id === itemId
+            ? {
+                ...existingItem,
+                category_name: previousCategory,
+                category_source: previousSource
+              }
+            : existingItem
+        )
+      }));
+    } finally {
+      setCategoryUpdateByItem(prev => ({ ...prev, [itemId]: false }));
+    }
+  };
+
   const shareItemEqually = (itemName) => {
     if (persons.length === 0) return; // Avoid division by zero
 
-    const equalShare = `1/${persons.length}`;
-
     setAllocations(prev => {
-      const newAllocations = { ...prev };
-      // Ensure the item exists in allocations
-      if (!newAllocations[itemName]) {
+      if (!prev[itemName]) {
           console.warn(`Item ${itemName} not found in allocations during shareEqually.`);
-          // Optionally initialize it here if needed based on billData
           return prev; // Or handle initialization
       }
-      const itemAllocation = { ...newAllocations[itemName] };
-
-      itemAllocation.shares = persons.reduce((acc, person) => {
-        acc[person.id] = equalShare;
-        return acc;
-      }, {});
-
-      newAllocations[itemName] = itemAllocation;
-      return newAllocations;
+      return shareItemEquallyInAllocations(prev, itemName, persons);
     });
   };
 
   const updateItemShare = (itemName, personId, shareValue) => {
     setAllocations(prev => {
-      const newAllocations = { ...prev };
-      // Ensure the item exists in allocations
-       if (!newAllocations[itemName]) {
+       if (!prev[itemName]) {
           console.warn(`Item ${itemName} not found in allocations during updateItemShare.`);
           return prev;
       }
-      const itemAllocation = { ...newAllocations[itemName] };
-
-      itemAllocation.shares = {
-        ...itemAllocation.shares,
-        [personId]: shareValue
-      };
-
-      newAllocations[itemName] = itemAllocation;
-      return newAllocations;
+      return updateAllocationShare(prev, itemName, personId, shareValue);
     });
   };
 
   const updateItemQuantity = (itemName, quantity) => {
-    // Ensure quantity is a positive number, default to 1 if invalid
-    const validQuantity = Math.max(1, Number(quantity) || 1);
-
     setAllocations(prev => {
-      const newAllocations = { ...prev };
-       // Ensure the item exists in allocations
-       if (!newAllocations[itemName]) {
+       if (!prev[itemName]) {
           console.warn(`Item ${itemName} not found in allocations during updateItemQuantity.`);
           return prev;
       }
-      newAllocations[itemName] = {
-        ...newAllocations[itemName],
-        totalQuantity: validQuantity
-      };
-      return newAllocations;
+      return updateAllocationQuantity(prev, itemName, quantity);
     });
   };
 
-  const parseItemEmoji = (itemName) => {
-    // Keep your existing emoji logic
-    const emojiMap = {
-      'bread': '🍞', 'milk': '🥛', 'cheese': '🧀', 'egg': '🥚', 'eggs': '🥚', 'tamago': '🥚',
-      'yogurt': '🥣', 'apple': '🍎', 'banana': '🍌', 'orange': '🍊', 'vegetable': '🥬',
-      'vegetables': '🥬', 'fruit': '🍎', 'fruits': '🍎', 'meat': '🥩', 'chicken': '🍗',
-      'fish': '🐟', 'rice': '🍚', 'noodle': '🍜', 'noodles': '🍜', 'pasta': '🍝',
-      'water': '💧', 'juice': '🧃', 'beer': '🍺', 'wine': '🍷', 'coffee': '☕', 'tea': '🍵',
-      'chocolate': '🍫', 'cookie': '🍪', 'cookies': '🍪', 'cake': '🍰', 'icecream': '🍦',
-      'ice cream': '🍦', 'candy': '🍬', 'snack': '🍿', 'snacks': '🍿', 'chip': '🍪',
-      'chips': '🍪', 'plastic bag': '🛍️', 'bag': '🛍️', 'tissue': '🧻', 'paper': '📄',
-      'tofu': '🧊', 'sauce': '🧂', 'oil': '🫗', 'spice': '🌶️', 'spices': '🌶️',
-      'seafood': '🦐', 'shrimp': '🦐', 'crab': '🦀', 'onion': '🧅', 'garlic': '🧄',
-      'tomato': '🍅', 'potato': '🥔', 'carrot': '🥕', 'cucumber': '🥒', 'avocado': '🥑',
-      'corn': '🌽', 'mushroom': '🍄', 'mushrooms': '🍄', 'lemon': '🍋', 'strawberry': '🍓',
-      'strawberries': '🍓', 'pineapple': '🍍', 'watermelon': '🍉'
-    };
-    const lowerName = itemName.toLowerCase();
-    if (emojiMap[lowerName]) return emojiMap[lowerName];
-    for (const [key, emoji] of Object.entries(emojiMap)) {
-      if (lowerName.includes(key)) return emoji;
-    }
-    return '🛒'; // Default
-  };
-
   const calculateSplit = () => {
-    let isValid = true;
-    const allocationErrors = [];
-
     if (!billData || !billData.items) {
         toast.error("Bill data is missing.");
         return;
     }
 
-    // Validate allocations first
-    for (const item of billData.items) {
-      const itemName = item.normalized_name;
-      const allocation = allocations[itemName];
-
-      if (!allocation) {
-        // This might happen if allocations weren't initialized correctly after bill processing
-        allocationErrors.push(`${itemName}: Allocation data missing.`);
-        isValid = false;
-        continue; // Skip further checks for this item
-      }
-
-      let totalShareValue = 0;
-      let invalidShareFormat = false;
-
-      for (const share of Object.values(allocation.shares)) {
-        let value = 0;
-        const trimmedShare = String(share).trim(); // Ensure it's a string and trim whitespace
-
-        if (trimmedShare === "") { // Treat empty string as 0
-            value = 0;
-        } else if (trimmedShare.includes('/')) {
-          const parts = trimmedShare.split('/');
-          if (parts.length === 2 && !isNaN(parseFloat(parts[0])) && !isNaN(parseFloat(parts[1])) && parseFloat(parts[1]) !== 0) {
-            value = parseFloat(parts[0]) / parseFloat(parts[1]);
-          } else {
-            invalidShareFormat = true; // Invalid fraction format
-          }
-        } else {
-          if (!isNaN(parseFloat(trimmedShare))) {
-            value = parseFloat(trimmedShare);
-          } else {
-              invalidShareFormat = true; // Not a valid number or fraction
-          }
-        }
-        if (value < 0) invalidShareFormat = true; // Shares cannot be negative
-        totalShareValue += value;
-      }
-
-      if (invalidShareFormat) {
-          isValid = false;
-          allocationErrors.push(`${itemName}: Invalid share format detected (use numbers like 0.5 or fractions like 1/2). Shares cannot be negative.`);
-      } else if (Math.abs(totalShareValue - allocation.totalQuantity) > 0.001) { // Use tolerance for float comparison
-        isValid = false;
-        allocationErrors.push(`${itemName}: Total allocated share (${totalShareValue.toFixed(2)}) does not match item quantity (${allocation.totalQuantity}).`);
-      }
-    }
-
-
-    if (!isValid) {
+    const validation = validateAllocations(billData.items, allocations);
+    if (!validation.isValid) {
+      const allocationErrors = validation.errors;
       toast.error(<div>Validation Errors:<br/>{allocationErrors.join('<br/>')}</div>, { autoClose: 10000 });
       return;
     }
 
-    // Calculate the split
-    const personTotals = {};
-    persons.forEach(person => {
-      personTotals[person.id] = {
-        name: person.name,
-        avatarColor: person.avatarColor,
-        emoji: person.emoji,
-        total: 0,
-        items: []
-      };
-    });
-
-    billData.items.forEach(item => {
-      const itemName = item.normalized_name;
-      const allocation = allocations[itemName]; // Already validated that this exists
-
-      const priceBeforeTax = item.price_before_tax;
-      const discount = item.discount_amount;
-
-      // Determine tax rate (same logic as before)
-      const taxRate = (itemName.toLowerCase().includes('plastic') &&
-                       itemName.toLowerCase().includes('bag')) ? 0.10 : 0.08;
-
-      // Calculate effective price including tax and discount
-      const itemTotalCost = (priceBeforeTax * (1 + taxRate)) - discount;
-
-      // Avoid division by zero if quantity is somehow invalid (should be caught by validation)
-      const unitCost = allocation.totalQuantity > 0 ? itemTotalCost / allocation.totalQuantity : 0;
-
-      Object.entries(allocation.shares).forEach(([personId, share]) => {
-        let shareValue = 0;
-        const trimmedShare = String(share).trim();
-        if (trimmedShare === "") {
-            shareValue = 0;
-        } else if (trimmedShare.includes('/')) {
-          const [numerator, denominator] = trimmedShare.split('/');
-          // We assume valid format here due to prior validation
-          shareValue = parseFloat(numerator) / parseFloat(denominator);
-        } else {
-          // We assume valid format here due to prior validation
-          shareValue = parseFloat(trimmedShare);
-        }
-
-        const personCostForItem = shareValue * unitCost;
-
-        // Ensure personId exists in personTotals (should always unless person removed mid-calculation)
-        if (personTotals[personId] && personCostForItem > 0) {
-          personTotals[personId].total += personCostForItem;
-          personTotals[personId].items.push({
-            name: itemName,
-            emoji: parseItemEmoji(itemName), // Use your emoji parser
-            share: shareValue, // Store the numeric value of the share
-            cost: personCostForItem
-          });
-        }
-      });
-    });
-
+    const personTotals = calculateSplitResults(billData.items, allocations, persons, parseItemEmoji);
     setSplitResults(personTotals);
     setCurrentStep(4);
   };
 
 
   const navigateToStep = (step) => {
+    if (step > maxSplitStep) {
+      return;
+    }
+
     // Allow navigating back freely
     if (step < currentStep) {
       // Reset future steps data if needed when going back
@@ -449,7 +445,7 @@ function App() {
     }
 
     // Validate before moving forward
-    if (step === 2 && currentStep === 1) {
+    if (isSplitEnabled && step === 2 && currentStep === 1) {
       const emptyNames = persons.filter(p => !p.name.trim());
       if (emptyNames.length > 0) {
         toast.error("Please provide names for all persons");
@@ -463,7 +459,7 @@ function App() {
     // Only allow moving forward one step at a time unless specific conditions met
     if (step === currentStep + 1) {
        // Conditions to allow moving forward (e.g., step 1 -> 2 needs names)
-       if (step === 2 && persons.some(p => !p.name.trim())) {
+       if (isSplitEnabled && step === 2 && persons.some(p => !p.name.trim())) {
            toast.error("Please provide names for all persons first.");
            return;
        }
@@ -499,6 +495,8 @@ function App() {
             onRemovePerson={removePerson}
             onUpdatePerson={updatePerson}
             onNext={() => navigateToStep(2)}
+            splitEnabled={isSplitEnabled}
+            onSplitEnabledChange={setIsSplitEnabled}
           />
         );
       case 2:
@@ -510,6 +508,8 @@ function App() {
             onProcessBill={processBill} // This function no longer needs apiKey
             isProcessing={isProcessing}
             onBack={() => navigateToStep(1)}
+            splitEnabled={isSplitEnabled}
+            onSplitEnabledChange={setIsSplitEnabled}
           />
         );
       case 3:
@@ -561,6 +561,10 @@ function App() {
                       onUpdateShare={(personId, value) => updateItemShare(item.normalized_name, personId, value)}
                       onUpdateQuantity={(qty) => updateItemQuantity(item.normalized_name, qty)}
                       itemEmoji={parseItemEmoji(item.normalized_name)}
+                      onDeleteItem={() => deleteItem(item.normalized_name)} // Pass deleteItem function
+                      categories={categories}
+                      onUpdateCategory={(categoryName) => updateItemCategory(item, categoryName)}
+                      isUpdatingCategory={Boolean(categoryUpdateByItem[item.id])}
                     />
                   </Grid>
                 );
@@ -601,7 +605,7 @@ function App() {
           <BillSummary
             splitResults={splitResults}
             persons={persons}
-            billTotal={billData ? billData.total_bill : 0}
+            calculatedBillTotal={calculatedBillTotal} // Pass the new calculated total
             onBack={() => navigateToStep(3)}
           />
         );
@@ -623,31 +627,58 @@ function App() {
             <span role="img" aria-label="receipt">🧾</span> PicSplit
           </Typography>
           <Typography variant="h6" color="text.secondary">
-            Split Japanese bills easily with AI translation
+            Expense tracking with optional bill splitting
           </Typography>
         </Box>
 
-        {/* Step Indicator */}
         <Box sx={{ mb: 4 }}>
-          {/* Using a simple indicator, replace with your 'steps' CSS/component if needed */}
-           <Box sx={{ display: 'flex', justifyContent: 'space-around', mb: 4, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-             {['Add People', 'Upload Bill', 'Allocate Items', 'View Split'].map((step, index) => (
-               <Button
-                 key={index}
-                 variant={currentStep === index + 1 ? 'contained' : 'text'}
-                 onClick={() => navigateToStep(index + 1)}
-                 disabled={index + 1 > currentStep && !(index + 1 === currentStep + 1 && currentStep < 4)} // Allow clicking current/previous, or next if conditions met
-                 sx={{ flexGrow: 1, mx: 0.5 }}
-               >
-                 {step}
-               </Button>
-             ))}
-           </Box>
+          <Paper elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2 }}>
+            <Tabs
+              value={activeView}
+              onChange={(_event, value) => setActiveView(value)}
+              variant="fullWidth"
+              textColor="primary"
+              indicatorColor="primary"
+            >
+              <Tab label="Dashboard" value="dashboard" />
+              <Tab label="Receipts" value="receipts" />
+              <Tab label="Split Bill" value="split" />
+            </Tabs>
+          </Paper>
         </Box>
 
         {/* Main Content Area */}
         <Box sx={{ mt: 3 }}>
-          {renderStepContent()}
+          {activeView === 'dashboard' ? (
+            <ExpenseDashboard />
+          ) : null}
+
+          {activeView === 'receipts' ? (
+            <ReceiptLibrary />
+          ) : null}
+
+          {activeView === 'split' ? (
+            <Box>
+              {/* Step Indicator */}
+              <Box sx={{ mb: 4 }}>
+                 <Box sx={{ display: 'flex', justifyContent: 'space-around', mb: 4, p: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                   {splitFlowSteps.map((step, index) => (
+                     <Button
+                       key={index}
+                       variant={currentStep === index + 1 ? 'contained' : 'text'}
+                       onClick={() => navigateToStep(index + 1)}
+                       disabled={index + 1 > currentStep && !(index + 1 === currentStep + 1 && currentStep < maxSplitStep)}
+                       sx={{ flexGrow: 1, mx: 0.5 }}
+                     >
+                       {step}
+                     </Button>
+                   ))}
+                 </Box>
+              </Box>
+
+              {renderStepContent()}
+            </Box>
+          ) : null}
         </Box>
       </Container>
     </ThemeProvider>

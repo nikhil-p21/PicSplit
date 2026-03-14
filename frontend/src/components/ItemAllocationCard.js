@@ -1,5 +1,21 @@
 import React, { useState } from 'react';
-import { Card, CardContent, Typography, Box, TextField, Button, Divider, Avatar, Alert } from '@mui/material';
+import {
+  Card,
+  CardContent,
+  Typography,
+  Box,
+  TextField,
+  Button,
+  Divider,
+  Avatar,
+  Alert,
+  IconButton,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem
+} from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
 import Emoji from 'react-emoji-render';
 
 const ItemAllocationCard = ({ 
@@ -9,7 +25,11 @@ const ItemAllocationCard = ({
   onShareEqually, 
   onUpdateShare,
   onUpdateQuantity,
-  itemEmoji
+  itemEmoji,
+  onDeleteItem, // Add onDeleteItem to props
+  categories = [],
+  onUpdateCategory,
+  isUpdatingCategory = false
 }) => {
   // Keep track of which fields are currently being edited
   const [editing, setEditing] = useState({});
@@ -100,8 +120,42 @@ const ItemAllocationCard = ({
     <Card>
       <CardContent>
         {/* Header with Avatar and Item Name */}
-        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-          <Avatar 
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <Avatar
+              sx={{
+                width: 40,
+                height: 40,
+                mr: 2,
+                bgcolor: '#f0f0f0',
+                color: '#000'
+              }}
+            >
+              <Emoji text={itemEmoji} />
+            </Avatar>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 600, wordBreak: 'break-word' }}>
+                {item.normalized_name}
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
+                {item.original_name}
+              </Typography>
+            </Box>
+          </Box>
+          {onDeleteItem && ( // Conditionally render if onDeleteItem is provided
+            <IconButton
+              aria-label="delete item"
+              onClick={onDeleteItem} // Corrected: Call directly as it's already bound with the correct item name
+              color="error"
+              size="small"
+            >
+              <DeleteIcon />
+            </IconButton>
+          )}
+        </Box>
+
+        {/* Original content moved into the inner Box above, this Avatar is part of the new structure */}
+        {/* <Avatar
             sx={{ 
               width: 40, 
               height: 40, 
@@ -111,16 +165,8 @@ const ItemAllocationCard = ({
             }}
           >
             <Emoji text={itemEmoji} />
-          </Avatar>
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 600, wordBreak: 'break-word' }}>
-              {item.normalized_name}
-            </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem' }}>
-              {item.original_name}
-            </Typography>
-          </Box>
-        </Box>
+          </Avatar> */}
+        {/* End of original content moved */}
         
         {/* Pricing Details */}
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 2 }}>
@@ -137,6 +183,29 @@ const ItemAllocationCard = ({
           )}
           <Typography variant="body2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center' }}>
             <span role="img" aria-label="total">🧮</span> ¥{effectivePrice.toFixed(2)}
+          </Typography>
+        </Box>
+
+        {/* Category Selector */}
+        <Box sx={{ mb: 2 }}>
+          <FormControl fullWidth size="small">
+            <InputLabel id={`category-label-${item.id || item.normalized_name}`}>Category</InputLabel>
+            <Select
+              labelId={`category-label-${item.id || item.normalized_name}`}
+              label="Category"
+              value={item.category_name || "Uncategorized"}
+              onChange={(e) => onUpdateCategory && onUpdateCategory(e.target.value)}
+              disabled={!onUpdateCategory || isUpdatingCategory}
+            >
+              {categories.map((category) => (
+                <MenuItem key={category} value={category}>
+                  {category}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Typography variant="caption" color="text.secondary">
+            Source: {item.category_source || "auto"} {isUpdatingCategory ? "(saving...)" : ""}
           </Typography>
         </Box>
         
