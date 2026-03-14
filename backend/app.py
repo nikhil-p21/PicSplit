@@ -82,51 +82,82 @@ def favicon():
      # Adjust path if your react build structure is different ('static' is common in create-react-app)
     return send_from_directory(os.path.join(app.static_folder, 'static'), 'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
-# --- Pydantic Models and Helper Functions (Keep exactly as original) ---
+# --- Constants ---
+MAX_IMAGE_DIMENSION = 1024
+IMAGE_QUALITY = 85
+
+
+# --- Image Optimization ---
+def _optimize_image_for_ocr(image: Image.Image) -> Image.Image:
+    """Resize and compress the image to reduce API token usage while
+    preserving OCR quality.  The longest edge is capped at
+    MAX_IMAGE_DIMENSION pixels."""
+    width, height = image.size
+    if max(width, height) > MAX_IMAGE_DIMENSION:
+        scale = MAX_IMAGE_DIMENSION / max(width, height)
+        new_size = (int(width * scale), int(height * scale))
+        image = image.resize(new_size, Image.LANCZOS)
+
+    # Convert RGBA / palette images to RGB so we can save as JPEG.
+    if image.mode in ("RGBA", "P", "LA"):
+        image = image.convert("RGB")
+
+    # Re-encode as JPEG in-memory to trim file size.
+    buf = io.BytesIO()
+    image.save(buf, format="JPEG", quality=IMAGE_QUALITY)
+    buf.seek(0)
+    return Image.open(buf)
+
+
+# --- Pydantic Models ---
 class BillItem(BaseModel):
-    original_name: str
-    normalized_name: str
-    price_before_tax: float
-    discount_amount: float = 0.0
-    emoji: Optional[str] = None
+    original_name: str = Field(description="The original text of the item exactly as printed on the receipt.")
+    normalized_name: str = Field(description="A cleaned-up, common English name for the item.")
+    quantity: float = Field(description="The quantity purchased. Output 1 if not listed.")
+    price_before_tax: float = Field(description="The unit price before tax for one unit of this item.")
+    discount_amount: float = Field(description="The discount applied to this item as a positive number. Output 0 if none.")
+    tax_rate: float = Field(description="The tax rate applied to this item as a decimal (e.g. 0.08 for 8%). Output 0 if unknown.")
+    category_suggestion: str = Field(description="A suggested expense category for this item. One of: Groceries, Dining, Transport, Utilities, Entertainment, Shopping, Healthcare, Travel, Education, Subscriptions, Miscellaneous, Uncategorized.")
+    emoji: str = Field(description="An appropriate emoji representing this item.")
+
 
 class Bill(BaseModel):
+    merchant_name: str = Field(description="The name of the store or restaurant. Output empty string if not visible.")
+    receipt_date: str = Field(description="The date on the receipt in YYYY-MM-DD format. Output empty string if not visible.")
+    currency: str = Field(description="The ISO 4217 currency code (e.g. USD, EUR, JPY).")
     items: List[BillItem]
-    total_bill: float
+    tax_amount: float = Field(description="The total tax amount shown on the receipt. Output 0 if unknown.")
+    tip_amount: float = Field(description="The tip amount if shown. Output 0 if none or not applicable.")
+    total_bill: float = Field(description="The final total amount on the receipt.")
 
 
 PROCESS_BILL_PROMPT = """
-You are given a supermarket grocery bill in Japanese that may have been OCRed and translated.
-The person who has the bill does not know Japanese and needs to translate the bill into English in order to split it manually with friends.
-For supermarket bills, note that if an item has a discount, the discount is mentioned on the line immediately below the item and starts with "code128割引". The value shown on the discount line is the amount of the discount. Associate this discount value with the item immediately preceding it.
+You are an expert AI system for extracting structured data from photos of receipts, invoices, and bills.
 
-Extract the following details:
+Analyze the provided receipt image carefully. The receipt may be in *any* language.
 
-1. For each *actual purchased item* (ignore discount lines in the final item list), output:
-   - "original_name": the original text of the item as recognized.
-   - "normalized_name": a cleaned-up, common name for the item in plain English. Use your best judgment.
-   - "price_before_tax": the base price as a number.
-   - "discount_amount": the discount on *that* specific item as a positive number. If there is no discount associated with it, output 0.
-   - "emoji": an appropriate emoji that represents this item.
+For each purchased item on the receipt:
+- "original_name": copy the item text exactly as printed.
+- "normalized_name": translate / clean up the name into simple, everyday English.
+- "quantity": the quantity purchased (default 1 if not listed).
+- "price_before_tax": the unit price before tax.
+- "discount_amount": the discount on this specific item as a positive number. Discounts may appear as negative line items, percentage reductions, or separate discount lines right below an item. Associate each discount with the correct item. If none, output 0.
+- "tax_rate": the tax rate for this item as a decimal (e.g. 0.10 for 10%). If the receipt does not show per-item tax, output 0.
+- "category_suggestion": suggest exactly ONE of these categories: Groceries, Dining, Transport, Utilities, Entertainment, Shopping, Healthcare, Travel, Education, Subscriptions, Miscellaneous, Uncategorized.
+- "emoji": an appropriate emoji for this item.
 
-2. Also extract the total bill amount as "total_bill".
+Also extract receipt-level information:
+- "merchant_name": the store / restaurant name, if visible.
+- "receipt_date": the date on the receipt in YYYY-MM-DD format, if visible.
+- "currency": the ISO 4217 currency code (e.g. USD, EUR, JPY).
+- "tax_amount": the total tax shown on the receipt (0 if not shown).
+- "tip_amount": the tip if present (0 if none).
+- "total_bill": the final total amount.
 
-Return a JSON object that conforms to this schema:
-{
-  "items": [
-    {
-      "original_name": "string",
-      "normalized_name": "string",
-      "price_before_tax": number,
-      "discount_amount": number,
-      "emoji": "string"
-    },
-    ...
-  ],
-  "total_bill": number
-}
-
-Return *only* the JSON object with no additional text or markdown formatting.
+IMPORTANT:
+- Do NOT include discount lines, subtotal lines, tax lines, or tip lines as items.
+- Only include actual purchased products or services.
+- If a discount line (e.g. a coupon, "割引", or negative value) appears directly below an item, apply it as that item's discount_amount and do NOT output it as a separate item.
 """
 
 
@@ -151,13 +182,7 @@ def _parse_json_form_value(field_name: str, default: Any) -> Any:
         raise ValueError(f"Invalid JSON for form field '{field_name}': {str(e)}")
 
 
-def _clean_model_json_text(response_text: str) -> str:
-    text = response_text.strip()
-    if "```json" in text:
-        return text.split("```json", 1)[1].split("```", 1)[0].strip()
-    if "```" in text:
-        return text.split("```", 1)[1].split("```", 1)[0].strip()
-    return text
+
 
 
 def _parse_share_value(share_text: Any) -> float:
@@ -181,6 +206,9 @@ def _build_receipt_payload_from_ingestion(
     metadata: Dict[str, Any],
     raw_ocr_payload: Dict[str, Any],
 ) -> Dict[str, Any]:
+    """Transform the LLM-extracted bill_data into the persistence-layer
+    receipt payload.  Uses LLM-extracted tax_rate, quantity, and
+    category_suggestion instead of hardcoded values."""
     participants = metadata.get("participants") or []
     allocations = metadata.get("allocations") or {}
 
@@ -188,13 +216,16 @@ def _build_receipt_payload_from_ingestion(
     for item in bill_data.get("items", []):
         item_name = item.get("normalized_name", "Unnamed item")
         item_allocation = allocations.get(item_name, {})
-        total_quantity = float(item_allocation.get("totalQuantity", 1) or 1)
+        total_quantity = float(item_allocation.get("totalQuantity", 0) or 0)
+        if total_quantity <= 0:
+            total_quantity = float(item.get("quantity", 1) or 1)
         shares = item_allocation.get("shares", {})
 
-        tax_rate = get_tax_rate(item_name)
+        # Use the LLM-extracted tax rate; fall back to 0 if missing.
+        tax_rate = float(item.get("tax_rate", 0.0))
         price_before_tax = float(item.get("price_before_tax", 0.0))
         discount_amount = float(item.get("discount_amount", 0.0))
-        effective_total = (price_before_tax * (1 + tax_rate)) - discount_amount
+        effective_total = (price_before_tax * total_quantity * (1 + tax_rate)) - discount_amount
 
         split_rows: List[Dict[str, Any]] = []
         if isinstance(shares, dict) and participants:
@@ -221,6 +252,14 @@ def _build_receipt_payload_from_ingestion(
                     "allocated_cost": share_value * unit_cost,
                 })
 
+        # Prefer the LLM's category suggestion; fall back to keyword matcher.
+        llm_category = item.get("category_suggestion")
+        category_name = (
+            item.get("category_name")
+            or (llm_category if llm_category and llm_category != "Uncategorized" else None)
+            or infer_item_category(item_name, item.get("original_name"))
+        )
+
         payload_items.append({
             "original_name": item.get("original_name", item_name),
             "normalized_name": item_name,
@@ -230,15 +269,17 @@ def _build_receipt_payload_from_ingestion(
             "tax_rate": tax_rate,
             "effective_total": effective_total,
             "emoji": item.get("emoji"),
-            "category_name": item.get("category_name") or infer_item_category(item_name, item.get("original_name")),
+            "category_name": category_name,
             "category_source": item.get("category_source", "auto"),
             "splits": split_rows,
         })
 
+    # Use LLM-extracted merchant / date / currency if the user didn't
+    # manually supply them in the form data.
     return {
-        "merchant_name": metadata.get("merchant_name"),
-        "receipt_date": metadata.get("receipt_date"),
-        "currency": metadata.get("currency", "JPY"),
+        "merchant_name": metadata.get("merchant_name") or bill_data.get("merchant_name"),
+        "receipt_date": metadata.get("receipt_date") or bill_data.get("receipt_date"),
+        "currency": metadata.get("currency") or bill_data.get("currency", "USD"),
         "total_amount": bill_data.get("total_bill"),
         "extracted_total": bill_data.get("total_bill"),
         "is_shared": metadata.get("is_shared", False),
@@ -259,11 +300,6 @@ def _build_receipt_payload_from_ingestion(
         "items": payload_items,
     }
 
-def get_tax_rate(item_name: str) -> float:
-    name_lower = item_name.lower()
-    if "plastic" in name_lower and "bag" in name_lower:
-        return 0.10
-    return 0.08
 
 def parse_fraction(s: str) -> Fraction:
     try:
@@ -271,47 +307,19 @@ def parse_fraction(s: str) -> Fraction:
     except Exception:
         return Fraction(0)
 
+
 def make_item_keys_unique(bill_data: Dict[str, Any]) -> Dict[str, Any]:
     items = bill_data.get("items", [])
-    frequency = {}
+    frequency: Dict[str, int] = {}
     for item in items:
         name = item.get("normalized_name")
         frequency[name] = frequency.get(name, 0) + 1
-    occurrence = {}
+    occurrence: Dict[str, int] = {}
     for item in items:
         name = item.get("normalized_name")
         if frequency[name] > 1:
             occurrence[name] = occurrence.get(name, 0) + 1
             item["normalized_name"] = f"{name} {occurrence[name]}"
-    return bill_data
-
-
-def merge_discount_items(bill_data: Dict[str, Any]) -> Dict[str, Any]:
-    items = bill_data.get("items", [])
-    merged_items = []
-    i = 0
-    while i < len(items):
-        current_item = items[i]
-        # Check if next item exists and is a discount line
-        if (i + 1 < len(items)) and ("code128割引" in items[i+1].get("original_name", "").lower()):
-            discount_item = items[i+1]
-            # Assign the price of the discount line as the discount amount to the item ABOVE it
-            discount_value = discount_item.get("price_before_tax", 0.0)
-            try:
-                current_item["discount_amount"] = float(discount_value)
-            except (ValueError, TypeError):
-                 logger.warning(f"Could not parse discount amount ({discount_value}) for item {current_item.get('original_name', 'N/A')}. Setting discount to 0.")
-                 current_item["discount_amount"] = 0.0
-
-            merged_items.append(current_item)
-            i += 2  # Skip the current item and the discount item
-        else:
-            # Ensure discount_amount exists even if no discount line follows
-            if "discount_amount" not in current_item:
-                 current_item["discount_amount"] = 0.0
-            merged_items.append(current_item)
-            i += 1
-    bill_data["items"] = merged_items
     return bill_data
 # --- End Pydantic Models and Helper Functions ---
 
@@ -524,12 +532,6 @@ def process_bill():
         return jsonify({"error": "Server configuration error. Cannot process request."}), 500
 
     try:
-        # --- REMOVED API key retrieval from request ---
-        # api_key = request.form.get('api_key') # REMOVED
-        # if not api_key: # REMOVED
-        #     return jsonify({"error": "API key is required"}), 400 # REMOVED
-        # --- End REMOVED ---
-
         # Stage 1: Validate request + get uploaded image
         if 'image' not in request.files:
             return jsonify({"error": "No image provided"}), 400
@@ -547,10 +549,17 @@ def process_bill():
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
 
-        # Stage 2: Load image
+        # Stage 2: Load and optimize image
         try:
             image_bytes = image_file.read()
             image = Image.open(io.BytesIO(image_bytes))
+            image = _optimize_image_for_ocr(image)
+            logger.info(
+                "Image optimized: %s -> %dx%d",
+                image_filename,
+                image.size[0],
+                image.size[1],
+            )
         except Exception as e:
             logger.error(f"Error opening image: {str(e)}")
             return jsonify({"error": f"Failed to open the image: {str(e)}"}), 400
@@ -562,11 +571,17 @@ def process_bill():
              logger.error(f"Failed to initialize GenAI client: {str(e)}")
              return jsonify({"error": "Failed to initialize AI service."}), 500
 
-        # Stage 4: OCR + extraction with Gemini
+        # Stage 4: OCR + extraction with Gemini (structured output)
         try:
+            from google.genai import types as genai_types
+
             response = client.models.generate_content(
                 model="gemini-2.0-flash",
-                contents=[PROCESS_BILL_PROMPT, image]
+                contents=[PROCESS_BILL_PROMPT, image],
+                config=genai_types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=Bill,
+                ),
             )
         except Exception as e:
             logger.error(f"GenAI content generation failed: {str(e)}\nTraceback: {traceback.format_exc()}")
@@ -575,16 +590,16 @@ def process_bill():
         # Stage 5: Parse and normalize extraction output
         raw_response_text = getattr(response, 'text', '')
         try:
-            response_json_text = _clean_model_json_text(raw_response_text)
-            bill_data_raw = Bill.parse_raw(response_json_text).dict()
+            bill_data_raw = json.loads(raw_response_text)
 
-            bill_data_merged = merge_discount_items(bill_data_raw) # Ensure discounts are handled
-            bill_data_final = make_item_keys_unique(bill_data_merged)
-            bill_data_final = _add_auto_categories_to_bill_data(bill_data_final)
+            # Validate through Pydantic and convert to dict
+            bill_validated = Bill.model_validate(bill_data_raw)
+            bill_data_final = bill_validated.model_dump()
+
+            bill_data_final = make_item_keys_unique(bill_data_final)
             raw_ocr_payload = {
                 "model": "gemini-2.0-flash",
                 "response_text": raw_response_text,
-                "parsed_json_text": response_json_text,
             }
 
             # Stage 6: Persist extracted receipt (optional, enabled by default)
@@ -595,7 +610,7 @@ def process_bill():
                 receipt_metadata = {
                     "merchant_name": request.form.get("merchant_name"),
                     "receipt_date": request.form.get("receipt_date"),
-                    "currency": request.form.get("currency") or "JPY",
+                    "currency": request.form.get("currency"),
                     "source_type": request.form.get("source_type") or "uploaded_receipt",
                     "notes": request.form.get("notes"),
                     "split_enabled": split_enabled,
